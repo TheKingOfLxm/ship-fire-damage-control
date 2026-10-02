@@ -163,9 +163,20 @@ class FirePredictor:
           原始 30 秒 checkpoint 兜底。
         """
         base = os.path.dirname(os.path.abspath(__file__))
-        roots = [os.path.join(base, '..', 'models_v6'),
-                 os.path.join(base, '..', 'models_v3'),
-                 os.path.join(base, '..', 'models_v2')]
+        # LSTM_MODEL_ROOTS 可以用逗号分隔覆盖搜索顺序（相对于仓库根）。
+        # 用途是**复现历史基线**：README 里"换 v6 之前有多糟"那张表就是这么
+        # 测的 —— LSTM_MODEL_ROOTS=models_v3,models_v2 就能让服务加载旧配方，
+        # 不必去重命名 models_v6 目录（那会污染工作区，还可能撞上文件占用）。
+        override = os.environ.get('LSTM_MODEL_ROOTS', '').strip()
+        if override:
+            roots = [os.path.join(base, '..', r.strip())
+                     for r in override.split(',') if r.strip()]
+            print(f"[INFO] 模型搜索路径被 LSTM_MODEL_ROOTS 覆盖: "
+                  f"{[os.path.basename(r.rstrip(os.sep)) for r in roots]}")
+        else:
+            roots = [os.path.join(base, '..', 'models_v6'),
+                     os.path.join(base, '..', 'models_v3'),
+                     os.path.join(base, '..', 'models_v2')]
         for compartment_name, model_dir in self.COMPARTMENT_MODEL_MAP.items():
             # 别名舱优先找真实舱名对应的重训产物
             real_name = self.NAME_ALIASES.get(compartment_name, compartment_name)
