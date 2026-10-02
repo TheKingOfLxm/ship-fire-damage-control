@@ -27,13 +27,15 @@ FDS 场模拟  →  多工况火灾发展轨迹  →  Seq2Seq LSTM  →  损管�
 
 留一工况交叉验证：训练时完全剔除某个火情（不同释热量/门宽），训练完在它身上评估。这正是损管实况——你永远不会遇到和训练集一模一样的火。
 
-| 舱室 | 容积 | 工况数 | 留一验证 MAE | 线上 300s 自回归 MAE | 0~30s | 120~300s |
-|---|---|---|---|---|---|---|
-| 灶炉间 | ~250 m³ | 4 | 6.07℃ | 25.29℃ | **2.48℃** | 30.78℃ |
-| 机库 | ~1,400 m³ | 4 | 4.16℃ | 19.95℃ | **1.48℃** | 24.68℃ |
-| 士兵住舱 | ~550 m³ | 5 | 2.76℃ | 4.94℃ | **1.60℃** | 5.62℃ |
-| 电站间 | ~460 m³ | 6 | 1.11℃ | 4.44℃ | **0.90℃** | 5.17℃ |
-| 主机舱 | 1,423 m³ | 5 | 4.70℃ | 12.10℃ | **2.72℃** | 14.60℃ |
+| 舱室 | 容积 | FDS 峰温 | 工况数 | 留一验证 MAE | 线上 300s 自回归 MAE | 0~30s | 120~300s |
+|---|---|---|---|---|---|---|---|
+| 灶炉间 | 193 m³ | 252℃ | 4 | 6.07℃ | 25.29℃ | **2.48℃** | 30.78℃ |
+| 机库 | 1,404 m³ | 220℃ | 4 | 4.16℃ | 19.95℃ | **1.48℃** | 24.68℃ |
+| 士兵住舱 | 552 m³ | 74℃ | 5 | 2.76℃ | 4.94℃ | **1.60℃** | 5.62℃ |
+| 电站间 | 460 m³ | 60℃ | 6 | 1.11℃ | 4.44℃ | **0.90℃** | 5.17℃ |
+| 主机舱 | 1,423 m³ | 135℃ | 5 | 4.70℃ | 12.10℃ | **2.72℃** | 14.60℃ |
+
+容积与 FDS 峰温取自 `config/compartments.json` 与 `tools/fds/train30/*.csv`，是实测值不是估计。
 
 **怎么读这张表**：
 
@@ -72,36 +74,130 @@ py -3 tools/selftest_server.py         # 服务自检，21 项
 
 ## 3. 快速开始
 
-### 依赖
+三个服务，端口固定 **5182 / 3001 / 5001**，按 LSTM → 后端 → 前端的顺序起。
+
+> **不需要装 FDS。** FDS 只在你要**重新生成训练数据**时才用得上（见 §6）。
+> `models_v6/` 和 `tools/fds/train30/` 都已随仓库提供，克隆下来直接能跑。
+> 模型文件没有伪装成数据——`models_v6/*/best_model.pth` 是训练产物，
+> `tools/fds/train30/*.csv` 是 FDS 仿真产出后转换的结果。
+
+### 3.1 前置：MySQL
+
+后端启动时会 `sequelize.authenticate()`，**连不上数据库直接 `process.exit(1)`**。
+所以这是硬前置，不是可选。
+
+```bash
+# 建库
+mysql -u root -p -e "CREATE DATABASE boat_fire_system
+                     DEFAULT CHARACTER SET utf8mb4
+                     COLLATE utf8mb4_unicode_ci;"
+
+# 配置连接（复制模板后按实际情况改）
+copy backend\.env.example backend\.env
+```
+
+`backend/.env` 关键项：
+
+```ini
+PORT=3001
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=boat_fire_system
+DB_USER=root
+DB_PASSWORD=你的密码
+```
+
+### 3.2 前端配置
+
+```bash
+copy config\.env.example config\.env.development
+```
+
+⚠️ 模板里 `VITE_LSTM_BASE_URL` 必须是 **5001**（与 `server.py` 的 `app.run(port=5001)` 一致）。
+写成 5000 会让健康检查一直失败、预测全部走降级，而且**不报任何错**。
+
+AI 分析功能需要 `VITE_AI_API_KEY`（GLM 智谱 或 通义千问）。**不填也能跑**，
+只是 AI 面板会走降级分析。
+
+### 3.3 安装依赖
 
 ```bash
 # 前端
-pnpm install          # 或 npm install
+pnpm install
 
-# Python 侧（不要用仓库里的 requirement.txt）
-# 那个是整份 Anaconda freeze（500+ 包，含 jupyter/streamlit/spyder），
-# 实际只需要这几个：
-pip install "torch>=2.5" "flask>=2.2" "flask-cors" \
-            "numpy>=1.26" "pandas>=2.2" "scikit-learn>=1.2" "joblib"
+# 后端（独立目录、独立 lockfile）
+cd backend && pnpm install && cd ..
+
+# Python 侧
+# ⚠️ 不要用仓库里的 requirement.txt —— 那是整份 Anaconda freeze
+#    （500+ 包，含 jupyter/streamlit/spyker），装一遍要几十分钟。
+# 实际只需要这六个：
+pip install "torch>=2.5" "flask>=2.2" flask-cors \
+            "numpy>=1.26" "pandas>=2.2" "scikit-learn>=1.2" joblib
 ```
 
-FDS 仿真另需 FDS 6.10.1（本项目在 PyroSim 2025 自带的 FDS 上验证）。
+> ⚠️ **前后端是两个独立的 Node 工程，必须分别安装。**
+> 根目录的 `pnpm install` 只装前端（vite 等），**不含** `sequelize` / `mysql2` ——
+> 这两个声明在 `backend/package.json` 里。不单独装后端的话，启动时会报
+> `Cannot find module 'sequelize'`。
+>
+> 两边都用 pnpm，别一边 pnpm 一边 npm —— 会装出两份依赖树，
+> `pnpm-lock.yaml` 与 `package-lock.json` 也会互相打架。
 
-### 启动
+### 3.4 初始化数据库
 
 ```bash
-# 1) LSTM 服务
-py -3 -u lstm-prediction-server/server.py        # 5001
-
-# 2) 后端
-cd backend && node src/app.js                    # 3001
-#    数据库连接读环境变量 DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD
-
-# 3) 前端
-npx vite --port 5182 --strictPort                # 5182
+cd backend && npm run init-db && cd ..
 ```
 
-`models_v6/` 下的五个模型已随仓库提供，克隆下来直接可用。
+这一步会 **`sync({ force: true })` 删表重建**，再灌入一艘默认船和五个舱室。
+⚠️ 会清空现有数据，只在首次部署时跑。
+
+### 3.5 启动三个服务
+
+开三个终端，按顺序：
+
+```bash
+# 终端 1 —— LSTM 服务
+py -3 -u lstm-prediction-server\server.py
+```
+
+```bash
+# 终端 2 —— 后端
+cd backend && node src/app.js
+```
+
+```bash
+# 终端 3 —— 前端
+npx vite --port 5182 --strictPort
+```
+
+### 3.6 确认起来了
+
+别光看窗口没报错，按下面逐条验：
+
+```bash
+# ① LSTM：应列出 6 个舱室（含"炉灶间"是"灶炉间"的别名），degraded 为空
+curl -s http://localhost:5001/api/lstm/health
+
+# ② 后端：应返回 {"status":"ok",...}
+curl -s http://localhost:3001/health
+
+# ③ 数据库：应返回 5 个舱室
+curl -s http://localhost:3001/api/compartments
+```
+
+然后浏览器打开 **http://localhost:5182**。
+
+在"舱室列表"里任选一个舱室点起火，右侧"态势预测"面板的温度应该在几十秒内
+爬升到 70~100℃ 区间。**如果温度一直卡在基值不动**，见 §9 排障表。
+
+### 3.7 可选：跑一遍自检
+
+```bash
+py -3 tools/selftest_server.py     # 21 项，验解码/网格/可信区间/降级标记
+py -3 tools/regress_online.py      # 拿真实 FDS 轨迹打服务，与真值逐点比对（约 5 分钟）
+```
 
 ---
 
@@ -263,13 +359,43 @@ py -3 tools/convert_growth.py 主机舱   # FDS devc -> 训练格式 + 增长段
 
 ## 9. 排障
 
+### 起不来
+
+| 现象 | 原因与处理 |
+|---|---|
+| 后端一启动就退出，日志 `数据库连接失败` | MySQL 没连上。后端 `sequelize.authenticate()` 失败会 `process.exit(1)`。先建 `boat_fire_system` 库并填 `backend/.env` |
+| `Cannot find module 'sequelize'` | 只在根目录装了依赖。`backend/` 是独立工程，要 `cd backend && pnpm install` |
+| 前端健康检查永远失败、预测全走降级 | `config/.env.development` 里 `VITE_LSTM_BASE_URL` 写成了 5000。必须是 **5001** |
+| 5001 端口被占用 | 改 `lstm-prediction-server/server.py` 的 `app.run(port=5001)`，同时改 `config/.env.development` 的 `VITE_LSTM_BASE_URL` 和 `vite.config.js` 的代理目标，三处要一致 |
+
+### 起来了但不对
+
 | 现象 | 原因 |
 |---|---|
-| 服务起来但接口超时 | torch 默认占满 16 核。服务已限制为 4 线程（`LSTM_TORCH_THREADS` 可调） |
+| **起火后温度一直卡在基值不动** | ① 检查 5001 是否真在跑：`curl -s localhost:5001/api/lstm/health`；② 检查后端日志有没有 `timeout of 15000ms exceeded`，有就是演化请求超时，示数会冻结 |
+| 温度爬升但很慢 | 机器负载过高导致 tick 变慢。已改为按墙钟时间推进；若仍慢，看 `backend_out.txt` |
 | 前端显示降级横幅 | 该舱室还是旧配方模型。查 `/api/lstm/health` 的 `degraded_compartments` |
-| 演化数值剧烈跳动 | 后端 tick 堆积。加了重入保护，若仍发生查 `backend_out.txt` 的 timeout 计数 |
+| 逐拍读数 ±10~15℃ 抖动 | 已知限制，见 §5②。起火最陡的 30 秒内最明显 |
+| 接口整体超时 | torch 占满 16 核。服务已限 4 线程，`LSTM_TORCH_THREADS` 可调 |
+| 舱室列表只有 4 个或名称不对 | 没跑 `npm run init-db`，或跑之前数据库里是旧数据（该脚本会 `force:true` 删表重建） |
 | 训练提示"跳过：文件仍在写入" | 完整性闸门正常工作，FDS 还在跑。等 15 分钟 |
-| 演化温度降到 0℃ 以下被钳到 0 | 旧版解码缺增量还原步骤。当前版本 `decode_raw` 是唯一解码入口 |
+| 演化温度被钳到 0℃ | 旧版解码缺增量还原。当前版本 `decode_raw` 是唯一解码入口 |
+
+### 正常长什么样（用来判断"是不是真跑通了"）
+
+在"舱室列表"任选一个舱室点起火。下面的"终值"是**训练数据里 FDS 实测的峰温**，
+仿真平台值会比它略低一点（模型是"保持 + 缓升"型，倾向于欠预测）：
+
+| 舱室 | 起火后 30 秒 | 终值（FDS 实测峰温） | 烟气层 CO₂ 峰 | 特征 |
+|---|---|---|---|---|
+| 灶炉间 | 70~90℃ | **252℃** | 3.66% | 增长最快，1~2 分钟冲到 200℃ 以上 |
+| 机库 | 25~40℃ | **220℃** | 4.25% | 释热量最大，烟最重 |
+| 主机舱 | 20~30℃ | **135℃** | 3.02% | 1 MW 油池火，**不闪燃**，平台在 130℃ 附近 |
+| 士兵住舱 | 22~30℃ | **74℃** | 1.42% | 可燃物少的小舱室，**永远不会**烧到几百度 |
+| 电站间 | 24~30℃ | **60℃** | 3.20% | 同上，但毒性气体浓度更关键 |
+
+**温度逐拍有抖动是正常的**（§5②），看的是趋势不是单点。
+如果 5 分钟内温度没有任何上升趋势，那才是坏了。
 
 ---
 
