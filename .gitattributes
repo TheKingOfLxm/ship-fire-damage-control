@@ -1,0 +1,26 @@
+# 统一换行符：仓库内一律 LF，检出到 Windows 时由 core.autocrlf 决定。
+# 不加这个，Windows 上编辑的文件会带 CRLF 提交进仓库，
+# 后面每次 diff 都会出现整文件级别的假变更。
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.js    text eol=lf
+*.cjs   text eol=lf
+*.mjs   text eol=lf
+*.json  text eol=lf
+*.vue   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.fds   text eol=lf
+*.csv   text eol=lf
+
+# 二进制，禁止换行转换
+*.pth  binary
+*.glb  binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.woff binary

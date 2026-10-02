@@ -1,0 +1,267 @@
+{
+  "glb": "ship.glb",
+  "size_mb": 0.101,
+  "draco": true,
+  "total_tris": 31714,
+  "total_verts": 18129,
+  "object_count": 14,
+  "bbox_min": [
+    -59.8,
+    -6.794,
+    -6.0
+  ],
+  "bbox_max": [
+    57.7,
+    6.794,
+    27.294
+  ],
+  "objects": [
+    {
+      "name": "Hull_Assembly",
+      "tris": 17704,
+      "verts": 9131,
+      "materials": [
+        "Hull_AntiFouling",
+        "Hull_BootTop",
+        "Hull_Topside",
+        "Hull_Flare",
+        "Metal_Gun"
+      ]
+    },
+    {
+      "name": "Deck_Assembly",
+      "tris": 2240,
+      "verts": 2107,
+      "materials": [
+        "Deck_Main",
+        "Deck_Black"
+      ]
+    },
+    {
+      "name": "Railings",
+      "tris": 7560,
+      "verts": 3984,
+      "materials": [
+        "Metal_Light"
+      ]
+    },
+    {
+      "name": "Superstructure_Assembly",
+      "tris": 216,
+      "verts": 144,
+      "materials": [
+        "Superstructure",
+        "Superstructure_Dk",
+        "Glass_Dark",
+        "Metal_Dark"
+      ]
+    },
+    {
+      "name": "Mast_Assembly",
+      "tris": 368,
+      "verts": 234,
+      "materials": [
+        "Metal_Light",
+        "Radome_White",
+        "Metal_Dark"
+      ]
+    },
+    {
+      "name": "Hangar_Assembly",
+      "tris": 844,
+      "verts": 889,
+      "materials": [
+        "Superstructure",
+        "Superstructure_Dk",
+        "Metal_Dark",
+        "Safety_Yellow",
+        "FlightDeck"
+      ]
+    },
+    {
+      "name": "Weapons_Assembly",
+      "tris": 244,
+      "verts": 152,
+      "materials": [
+        "Metal_Dark",
+        "Metal_Gun",
+        "Superstructure_Dk",
+        "Safety_Red"
+      ]
+    },
+    {
+      "name": "Helicopter_Assembly",
+      "tris": 358,
+      "verts": 216,
+      "materials": [
+        "Superstructure",
+        "Rotor_Dark"
+      ]
+    },
+    {
+      "name": "DeckDetails_Assembly",
+      "tris": 2120,
+      "verts": 1232,
+      "materials": [
+        "Metal_Light",
+        "Metal_Dark",
+        "Lifeboat_Orange",
+        "Light_Nav",
+        "Light_Green",
+        "Light_Red"
+      ]
+    },
+    {
+      "name": "COMPARTMENT_1",
+      "tris": 12,
+      "verts": 8,
+      "materials": [
+        "CompartmentPick"
+      ]
+    },
+    {
+      "name": "COMPARTMENT_2",
+      "tris": 12,
+      "verts": 8,
+      "materials": [
+        "CompartmentPick"
+      ]
+    },
+    {
+      "name": "COMPARTMENT_3",
+      "tris": 12,
+      "verts": 8,
+      "materials": [
+        "CompartmentPick"
+      ]
+    },
+    {
+      "name": "COMPARTMENT_4",
+      "tris": 12,
+      "verts": 8,
+      "materials": [
+        "CompartmentPick"
+      ]
+    },
+    {
+      "name": "COMPARTMENT_5",
+      "tris": 12,
+      "verts": 8,
+      "materials": [
+        "CompartmentPick"
+      ]
+    }
+  ],
+  "compartments": [
+    {
+      "id": 1,
+      "name": "主机舱",
+      "node": "COMPARTMENT_1",
+      "bounds": [
+        [
+          -48.0,
+          -3.6,
+          -5.2
+        ],
+        [
+          -30.0,
+          4.0,
+          5.2
+        ]
+      ],
+      "anchor": [
+        -39.0,
+        0.5,
+        0.0
+      ]
+    },
+    {
+      "id": 2,
+      "name": "电站间",
+      "node": "COMPARTMENT_2",
+      "bounds": [
+        [
+          -4.0,
+          0.4,
+          -5.0
+        ],
+        [
+          6.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "anchor": [
+        1.0,
+        2.6,
+        0.0
+      ]
+    },
+    {
+      "id": 3,
+      "name": "灶炉间",
+      "node": "COMPARTMENT_3",
+      "bounds": [
+        [
+          22.0,
+          4.6,
+          -4.6
+        ],
+        [
+          29.0,
+          7.6,
+          4.6
+        ]
+      ],
+      "anchor": [
+        25.5,
+        6.0,
+        0.0
+      ]
+    },
+    {
+      "id": 4,
+      "name": "士兵住舱",
+      "node": "COMPARTMENT_4",
+      "bounds": [
+        [
+          8.0,
+          0.8,
+          -5.0
+        ],
+        [
+          20.0,
+          5.4,
+          5.0
+        ]
+      ],
+      "anchor": [
+        14.0,
+        3.0,
+        0.0
+      ]
+    },
+    {
+      "id": 5,
+      "name": "机库",
+      "node": "COMPARTMENT_5",
+      "bounds": [
+        [
+          -28.0,
+          0.5,
+          -5.6
+        ],
+        [
+          -6.0,
+          6.2,
+          5.6
+        ]
+      ],
+      "anchor": [
+        -17.0,
+        3.2,
+        0.0
+      ]
+    }
+  ]
+}

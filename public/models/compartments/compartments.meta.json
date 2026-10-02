@@ -1,0 +1,162 @@
+{
+  "generated_by": "tools/build_compartments.py",
+  "compartments": [
+    {
+      "id": 1,
+      "key": "main-engine",
+      "label": "主机舱",
+      "tris": 2064,
+      "verts": 1240,
+      "materials": [
+        "DeckPlate",
+        "BulkheadPaint",
+        "BulkheadLower",
+        "MachineMid",
+        "DeckMarking",
+        "MachineGrey",
+        "MachineDark",
+        "ShaftPolish",
+        "SafetyRed",
+        "SafetyYellow",
+        "PanelFace",
+        "Indicator"
+      ],
+      "kb": 16.6,
+      "draco": true,
+      "bbox_min": [
+        -48.0,
+        -3.6,
+        -5.2
+      ],
+      "bbox_max": [
+        -30.0,
+        -0.31,
+        5.2
+      ]
+    },
+    {
+      "id": 2,
+      "key": "power-room",
+      "label": "电站间",
+      "tris": 1488,
+      "verts": 948,
+      "materials": [
+        "DeckPlate",
+        "BulkheadPaint",
+        "BulkheadLower",
+        "MachineMid",
+        "DeckMarking",
+        "MachineDark",
+        "MachineGrey",
+        "PanelFace",
+        "Indicator",
+        "ShaftPolish"
+      ],
+      "kb": 12.9,
+      "draco": true,
+      "bbox_min": [
+        -4.0,
+        0.4,
+        -5.0
+      ],
+      "bbox_max": [
+        6.0,
+        3.12,
+        5.0
+      ]
+    },
+    {
+      "id": 3,
+      "key": "galley",
+      "label": "灶炉间",
+      "tris": 1176,
+      "verts": 736,
+      "materials": [
+        "DeckPlate",
+        "BulkheadPaint",
+        "BulkheadLower",
+        "MachineMid",
+        "MachineGrey",
+        "ShaftPolish",
+        "MachineDark",
+        "Brass",
+        "Insulation",
+        "SafetyRed",
+        "SafetyYellow"
+      ],
+      "kb": 13.7,
+      "draco": true,
+      "bbox_min": [
+        22.0,
+        4.6,
+        -4.6
+      ],
+      "bbox_max": [
+        29.0,
+        7.43,
+        4.6
+      ]
+    },
+    {
+      "id": 4,
+      "key": "berthing",
+      "label": "士兵住舱",
+      "tris": 1816,
+      "verts": 1172,
+      "materials": [
+        "DeckPlate",
+        "BulkheadPaint",
+        "BulkheadLower",
+        "MachineMid",
+        "Insulation",
+        "Mattress",
+        "ShaftPolish",
+        "MachineDark"
+      ],
+      "kb": 12.2,
+      "draco": true,
+      "bbox_min": [
+        8.0,
+        0.8,
+        -5.0
+      ],
+      "bbox_max": [
+        20.0,
+        3.02,
+        5.0
+      ]
+    },
+    {
+      "id": 5,
+      "key": "hangar",
+      "label": "机库",
+      "tris": 1804,
+      "verts": 1080,
+      "materials": [
+        "DeckPlate",
+        "BulkheadPaint",
+        "BulkheadLower",
+        "MachineMid",
+        "DeckMarking",
+        "ShaftPolish",
+        "MachineDark",
+        "SafetyYellow",
+        "PanelFace",
+        "SafetyRed",
+        "MachineGrey"
+      ],
+      "kb": 14.7,
+      "draco": true,
+      "bbox_min": [
+        -28.0,
+        0.5,
+        -5.6
+      ],
+      "bbox_max": [
+        -6.0,
+        3.56,
+        5.6
+      ]
+    }
+  ]
+}

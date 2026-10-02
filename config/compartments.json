@@ -1,0 +1,128 @@
+{
+  "$comment": "舰船与舱室的唯一权威定义。前端 src/config/shipLayout.js 与后端 src/services/layout.js 都读这里，任何一侧都不得再各自硬编码。坐标系：+X 船艏 / +Y 向上 / +Z 右舷 / Y=0 为设计水线，单位米。",
+  "ship": {
+    "id": 1,
+      "camera": { "offset": { "x": -14, "y": 10, "z": 17 } },
+    "name": "海鹰级护卫舰",
+    "nameEn": "HAIYING-CLASS FRIGATE",
+    "hullNumber": "FFG-572",
+    "type": "frigate",
+    "typeLabel": "导弹护卫舰",
+    "length": 115,
+    "beam": 13.6,
+    "draft": 4.2
+  },
+  "compartments": [
+    {
+      "id": 1,
+      "camera": { "offset": { "x": -14, "y": 10, "z": 17 } },
+      "code": "E-01",
+      "name": "主机舱",
+      "type": "engine_room",
+      "fireCause": "engine",
+      "deck": "下层甲板 · 机舱区",
+      "description": "燃气轮机与推进系统所在，燃油管路与高温部件集中，是全舰火灾后果最严重的舱室。",
+      "anchor": { "x": -39, "y": 0.5, "z": 0 },
+      "fireOrigin": { "x": -44.5, "y": -3.2, "z": 3.2 },
+      "fireSize": { "w": 9.0, "h": 5.4 },
+      "bounds": {
+        "min": { "x": -48, "y": -3.6, "z": -5.2 },
+        "max": { "x": -30, "y": 4.0, "z": 5.2 }
+      },
+      "model": "/models/compartments/main-engine.glb",
+      "risk": "critical",
+      "base": { "temperature": 45, "smoke": 0, "oxygen": 20.9, "co": 0 },
+      "fuel": { "tMax": 780, "tau": 46, "smoke": 0.55, "co": 0.40, "label": "机械润滑与燃油" }
+    },
+    {
+      "id": 2,
+      "camera": { "offset": { "x": -8, "y": 9, "z": 12 } },
+      "code": "E-02",
+      "name": "电站间",
+      "type": "power_station",
+      "fireCause": "electrical",
+      "deck": "下层甲板 · 动力区",
+      "description": "主发电机与配电盘所在，火灾易引发全舰失电与推进系统瘫痪。",
+      "anchor": { "x": 1, "y": 2.6, "z": 0 },
+      "fireOrigin": { "x": 3.0, "y": 0.7, "z": 4.0 },
+      "fireSize": { "w": 6.0, "h": 3.8 },
+      "bounds": {
+        "min": { "x": -4, "y": 0.4, "z": -5.0 },
+        "max": { "x": 6, "y": 5.0, "z": 5.0 }
+      },
+      "model": "/models/compartments/power-room.glb",
+      "risk": "high",
+      "base": { "temperature": 35, "smoke": 0, "oxygen": 20.9, "co": 0 },
+      "fuel": { "tMax": 620, "tau": 30, "smoke": 0.80, "co": 0.22, "label": "电缆绝缘" }
+    },
+    {
+      "id": 3,
+      "camera": { "offset": { "x": -2, "y": 8, "z": 12 } },
+      "code": "E-03",
+      "name": "灶炉间",
+      "type": "galley",
+      "fireCause": "kitchen",
+      "deck": "上层甲板 · 艏部生活区",
+      "description": "厨房与餐炊区域，油烟与明火并存，是舰艇日常火灾的高发舱室。",
+      "anchor": { "x": 25.5, "y": 6.0, "z": 0 },
+      "fireOrigin": { "x": 23.9, "y": 5.6, "z": -4.0 },
+      "fireSize": { "w": 3.8, "h": 2.8 },
+      "bounds": {
+        "min": { "x": 22, "y": 4.6, "z": -4.6 },
+        "max": { "x": 29, "y": 7.6, "z": 4.6 }
+      },
+      "model": "/models/compartments/galley.glb",
+      "risk": "medium",
+      "base": { "temperature": 28, "smoke": 0, "oxygen": 20.9, "co": 0 },
+      "fuel": { "tMax": 540, "tau": 26, "smoke": 0.60, "co": 0.55, "label": "食用油脂" }
+    },
+    {
+      "id": 4,
+      "camera": { "offset": { "x": 3, "y": 9, "z": 13 } },
+      "code": "E-04",
+      "name": "士兵住舱",
+      "type": "living_quarters",
+      "fireCause": "fabric",
+      "deck": "上层甲板 · 生活区",
+      "description": "水手居住与休息舱室，人员密集、可燃物多，火灾直接威胁人员安全。",
+      "anchor": { "x": 14, "y": 3.0, "z": 0 },
+      "fireOrigin": { "x": 14.0, "y": 1.4, "z": 4.2 },
+      "fireSize": { "w": 5.6, "h": 3.5 },
+      "bounds": {
+        "min": { "x": 8, "y": 0.8, "z": -5.0 },
+        "max": { "x": 20, "y": 5.4, "z": 5.0 }
+      },
+      "model": "/models/compartments/berthing.glb",
+      "risk": "high",
+      "base": { "temperature": 22, "smoke": 0, "oxygen": 20.9, "co": 0 },
+      "fuel": { "tMax": 560, "tau": 32, "smoke": 0.95, "co": 0.62, "label": "舱室织物与家具" }
+    },
+    {
+      "id": 5,
+      "camera": { "offset": { "x": 5, "y": 12, "z": 19 } },
+      "code": "E-05",
+      "name": "机库",
+      "type": "hangar",
+      "fireCause": "fuel",
+      "deck": "后甲板 · 机库区",
+      "description": "直升机库与燃油加注区，紧邻航空燃油管路，是最高等级的火灾危险区。",
+      "anchor": { "x": -17, "y": 3.2, "z": 0 },
+      "fireOrigin": { "x": -25.8, "y": 0.9, "z": -4.6 },
+      "fireSize": { "w": 8.0, "h": 4.4 },
+      "bounds": {
+        "min": { "x": -28, "y": 0.5, "z": -5.6 },
+        "max": { "x": -6, "y": 6.2, "z": 5.6 }
+      },
+      "model": "/models/compartments/hangar.glb",
+      "risk": "critical",
+      "base": { "temperature": 25, "smoke": 0, "oxygen": 20.9, "co": 0 },
+      "fuel": { "tMax": 700, "tau": 20, "smoke": 0.68, "co": 0.78, "label": "航空燃油" }
+    }
+  ],
+  "thresholds": {
+    "temperature": { "warn": 200, "crit": 400, "max": 800, "unit": "℃" },
+    "smoke": { "warn": 20, "crit": 45, "max": 100, "unit": "%" },
+    "oxygen": { "warn": 19, "crit": 16, "min": 8, "unit": "%" },
+    "co": { "warn": 50, "crit": 150, "max": 500, "unit": "ppm" }
+  }
+}

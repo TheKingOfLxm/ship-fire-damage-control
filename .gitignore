@@ -1,0 +1,140 @@
+# ============================================================
+# 依赖与构建产物
+# ============================================================
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+*.tsbuildinfo
+.pnpm-store/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ============================================================
+# 环境变量与密钥
+# 注意：本项目用的是 env.development / env.production 这种命名，
+# 不是 .env.*。早先的 .gitignore 只写了 .env*，这两个文件其实
+# 一直是可以被提交进去的 —— 公开仓库必须显式排除。
+# ============================================================
+.env
+.env.*
+!.env.example
+env.development
+env.production
+env.local
+*.pem
+*.key
+!src/**/*.key
+
+# ============================================================
+# 运行期数据
+# ============================================================
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# SQLite / 本地数据库快照
+db.json
+*.sqlite
+*.sqlite3
+*.db
+
+# ============================================================
+# FDS 仿真原始输出（tools/fds 共 1.2 GB，可由 tools/ 下的脚本重新生成）
+#
+# 整个 tools/fds 都排除，只放行 train30/ —— 服务端播种火灾状态窗口时
+# 读的就是它，缺了演化链路起不来。git 的反向规则必须逐层放行父目录。
+# ==================================================================
+tools/fds/*
+!tools/fds/train30/
+!tools/fds/train30/*.csv
+
+# FDS 各���中间产物（通配，防止新生成的漏网）
+*.smv
+*.s3d
+*.s3dd
+*.s3d.sz
+*.sf
+*.sf.bnd
+*.restart
+*.q
+*.q.bnd
+*_devc.csv
+*_hrr.csv
+*_steps.csv
+*_cpu.csv
+*_git.txt
+
+# PyroSim 工程文件与导出物
+pyrosim-projects/
+pyrosim-output/
+*.psm
+*.ps~
+*.pyrofloors
+*.pyrogeom
+*.views
+
+# tools/ 下的运行日志与渲染预览（可重新生成）
+tools/*.txt
+tools/preview/
+
+# ============================================================
+# 模型权重
+#
+# models_v6 是**在用的**五个舱室模型（每个约 481 KB），随仓库发布，
+# 克隆下来即可运行。v2/v3 是被 v6 取代的旧配方，v4/v5 是失败实验，
+# models_multi 是历史产物，都不入库。
+# 重新训练：RETRAIN_V6_FOLDS=1 py -3 tools/retrain_v6.py
+# ============================================================
+models_v2/
+models_v3/
+models_v4/
+models_v5/
+models_multi/
+models_v6/**/*.tmp
+
+# ============================================================
+# 三维资产
+#
+# trawler.glb 是 61.77 MB，src/ 下没有任何引用（grep 全库无命中），
+# 是早期遗留的渔船模型。公开仓库不放死资产 —— 确认无用后可直接删除。
+# ============================================================
+public/models/trawler.glb
+
+# ============================================================
+# 编辑器与系统
+# ============================================================
+# settings.local.json 是**本机**的 Claude Code 权限配置，
+# 带个人工作流和历史 PID，不应随仓库分发。
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ============================================================
+# 杂项
+# ============================================================
+# nul 是 Windows 保留设备名，误重定向产生的 0 字节垃圾文件。
+# git 无法索引它（error: open("backend/nul"): No such file），
+# 会让 git add -A 整个失败。
+nul
+NUL
+**/nul
+**/NUL
+_nul
+*.docx
+/cache/
+/tmp/

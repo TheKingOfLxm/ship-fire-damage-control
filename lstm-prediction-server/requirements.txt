@@ -1,0 +1,7 @@
+# LSTM火灾预测服务依赖
+flask
+flask-cors
+torch
+numpy
+pandas
+scikit-learn

@@ -1,0 +1,25 @@
+/**
+ * 最小全局重置
+ * 主重置与设计令牌在 modern-ui.css 中定义；本文件只补它没覆盖的部分。
+ * 注意：不要再在这里设置 background/color —— 旧的浅色 body 样式与深色指挥台主题冲突。
+ */
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+img,
+svg,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+/* 应用容器：锁定视口，不产生外层滚动 */
+#app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
