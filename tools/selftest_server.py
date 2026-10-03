@@ -73,8 +73,10 @@ def main():
                  {"compartmentName": c, "steps": 5,
                   "base": {"temperature": 28, "co": 0, "co2": 400}})
         w = ((r.get("data") or {}).get("window") or [])
-        passed += check(f"{c} evolve 窗口列数 = 3",
-                        r.get("code") == 200 and (not w or len(w[0]) == 3),
+        # 期望列数 = 该模型 inputDim：v7 干预模型是 4（含灭火状态 S），其余 3
+        want_dim = int((shapes.get(c) or {}).get("inputDim") or 3)
+        passed += check(f"{c} evolve 窗口列数 = inputDim({want_dim})",
+                        r.get("code") == 200 and (not w or len(w[0]) == want_dim),
                         f"行数 {len(w)}")
 
     # ③ 网格错配：0.1s 模型读 0.5s 的 train30

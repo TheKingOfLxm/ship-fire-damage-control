@@ -180,6 +180,15 @@
             </div>
           </section>
 
+          <!-- 演化停摆：读数冻结时必须能区分"火稳住了"和"引擎挂了" -->
+          <p v-if="ops.stalledFires.length" class="notice notice--warn">
+            <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+            <span>
+              {{ ops.stalledFires.map(c => c.name).join('、') }} 的演化引擎超过 15 秒没有推进成功，
+              当前读数是冻结值而非实时值。请检查 LSTM 服务（5001）是否存活。
+            </span>
+          </p>
+
           <section class="card">
             <header class="card__head">
               <h2 class="card__title">采样状态</h2>
@@ -710,7 +719,6 @@ const props = defineProps({
   defaultTab: { type: String, default: '' },
   selectedCompartment: { type: Number, default: null },
   isFireActive: { type: Boolean, default: false },
-  fireIntensity: { type: Number, default: 0 },
   busy: { type: Boolean, default: false },
   isOpen: { type: Boolean, default: false }
 })
@@ -809,15 +817,15 @@ const modelDegraded = computed(() => {
   const tail = Number.isFinite(h) && h > 0
     ? `单次预测仅 ${h} 秒可用` : '单次预测窗口极短'
   return `${name} 当前仍是 ${src} 配方模型（${tail}）：`
-    + `自回归外推会收敛到常数平台，温度/气体曲线只能当作示意，不能作为处置依据。`
+    + '自回归外推会收敛到常数平台，温度/气体曲线只能当作示意，不能作为处置依据。'
 })
 
 /** 火灾严重度里带模型能力标记 */
 const engineLimit = computed(() => {
   const info = engineInfo.value
   if (!info) return null
-  const noTemp = info.limitations?.noTemperatureSignal || []
-  if (noTemp.includes(selected.value?.name)) {
+  const lim = info.limitations || {}
+  if (lim.noTemperatureSignal?.includes(selected.value?.name)) {
     return `${selected.value.name} 的温度不在模型驱动范围内 —— 该舱室训练数据中温度全程恒定，温度不可作为判断依据。`
   }
   // 把"多长的预测可信"和"总共多少训练数据"分开说清楚，
@@ -827,6 +835,9 @@ const engineLimit = computed(() => {
   const parts = [`模型单次预测窗口约 ${info.predictionWindowSeconds ?? '—'}s`]
   if (step) parts.push(`时间步长 ${step}s`)
   parts.push(`训练轨迹总长仅 ${horizon}s，累计外推超过这个长度后属于分布外外推`)
+  // 推导通道与舱间耦合是模型能力的硬边界，必须跟着能力说明一起出现
+  if (lim.derivedChannels?.length) parts.push('烟雾/氧气为推导值，非模型输出')
+  if (lim.interCompartment === false) parts.push('各舱独立演化，不含舱间蔓延耦合')
   return parts.join(' · ')
 })
 

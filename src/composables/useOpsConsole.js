@@ -44,14 +44,16 @@ export const THRESHOLDS = {
   temperature: { unit: '℃', max: 800, warn: 200, crit: 400, digits: 0 },
   smoke: { unit: '%', max: 100, warn: 20, crit: 45, digits: 1 },
   oxygen: { unit: '%', max: 25, warn: 19, crit: 16, digits: 1, inverse: true },
-  co: { unit: 'ppm', max: 500, warn: 50, crit: 150, digits: 0 }
+  co: { unit: 'ppm', max: 500, warn: 50, crit: 150, digits: 0 },
+  co2: { unit: 'ppm', max: 60000, warn: 15000, crit: 50000, digits: 0 }
 }
 
 const METRICS = [
   { key: 'temperature', label: '温度' },
   { key: 'smoke', label: '烟雾浓度' },
   { key: 'oxygen', label: '氧气浓度' },
-  { key: 'co', label: '一氧化碳' }
+  { key: 'co', label: '一氧化碳' },
+  { key: 'co2', label: '二氧化碳' }
 ]
 
 /** 各舱室燃料特性：仅在后端不可达时用于本地兜底演化 */
@@ -168,7 +170,7 @@ function createOpsConsole() {
   const payload = res => res?.data?.data
 
   async function readFleet() {
-    if (inFlight) return
+    if (inFlight || document.hidden) return
     inFlight = true
     try {
       const d = payload(await fireAPI.getFleetStatus()) || {}
@@ -178,6 +180,7 @@ function createOpsConsole() {
           smoke: item.smoke,
           oxygen: item.oxygen,
           co: item.co,
+          co2: item.co2,
           source: item.fireActive ? 'lstm' : 'baseline'
         }
         const prev = fires[item.compartmentId] || {}
@@ -185,7 +188,9 @@ function createOpsConsole() {
           ...prev,
           active: item.fireActive,
           severity: item.severity ?? 0,
-          temperatureModelDriven: item.temperatureModelDriven ?? true
+          temperatureModelDriven: item.temperatureModelDriven ?? true,
+          // 演化停摆：后端 15 秒没推进成功过。必须与"火稳住了"区分展示。
+          stalled: item.evolutionStalled ?? false
         }
       }
       backendOnline.value = true
@@ -274,12 +279,18 @@ function createOpsConsole() {
         await lstmService.getConfig()
         // 走长时程投影：LSTM 段到极限环为止，之后用舱室火灾增长律外推，
         // 逐点标 basis。纯 LSTM 自回归 30 分钟会收敛成假曲线。
-        const res = await lstmService.project(spec.name, series, lstm.horizon)
+        // 灭火进行中时把灭火状态传给 v7 干预模型 —— 投影是"持续扑救下
+        // 火会怎么走"，而不是"假设没人管"。
+        const suppressing = !!fires[id]?.suppressed
+        const res = await lstmService.project(
+          spec.name, series, lstm.horizon, suppressing ? 1 : 0)
         if (res && res.points?.length) {
           lstm.predictions = res.points
           lstm.analysis = res.analysis || null
           lstm.source = 'lstm'
-          lstm.sourceLabel = res.analysis?.basis || 'LSTM + 增长律投影'
+          lstm.sourceLabel = suppressing && res.analysis?.interventionChannel
+            ? 'LSTM 干预模型投影（灭火中）'
+            : (res.analysis?.basis || 'LSTM + 增长律投影')
           lstm.updatedAt = Date.now()
           lstm.error = null
           lstm.running = false
@@ -623,47 +634,42 @@ function createOpsConsole() {
 
   const unreadAlerts = computed(() => activeAlerts.value.filter(a => !a.acknowledged).length)
 
-  const worstRisk = computed(() => {
-    const order = { info: 0, low: 1, medium: 2, high: 3, critical: 4 }
-    let worst = 'info'
-    for (const c of COMPARTMENTS) {
-      const f = fires[c.id]
-      if (!f?.active) continue
-      const r = readings[c.id]
-      const lv = ['temperature', 'smoke', 'oxygen', 'co']
-        .map(m => severityOf(m, r[m]))
-        .reduce((a, b) => (b === 'crit' ? b : a), 'ok')
-      const mapped = lv === 'crit' ? 'critical' : lv === 'warn' ? 'medium' : 'info'
-      if (order[mapped] > order[worst]) worst = mapped
-    }
-    return worst
-  })
+  /** 演化停摆的舱室（LSTM 服务掉线/超时导致读数冻结） */
+  const stalledFires = computed(() =>
+    COMPARTMENTS.filter(c => fires[c.id]?.active && fires[c.id]?.stalled)
+  )
 
   /* ══════════════ 生命周期 ══════════════ */
 
   const ctx = {
     // 状态
     readings, fires, history, historyRates, alerts, activeAlerts, unreadAlerts,
-    engineInfo, backendOnline, lastError, updatedAt, lstm, ai, activeFires,
-    selectedId, selectedName, selected, fireIntensity, worstRisk,
-    THRESHOLDS, METRICS, FIRE_PROFILE, FIRE_TYPES, BASELINE,
+    engineInfo, backendOnline, lastError, updatedAt, lstm, ai, activeFires, stalledFires,
+    selectedId, selectedName, selected, fireIntensity, THRESHOLDS, METRICS,
+    FIRE_PROFILE, FIRE_TYPES, BASELINE,
     // 行为
     command, runPrediction, ackAlert, resolveAlert,
     analyze, sendChat, clearChat: () => { ai.chat = [] }, fetchModels,
     readFleet, readAlerts, readHistory, readEngineInfo,
+    /** 告警中心"刷新"按钮用：与轮询同一条读取路径 */
+    refreshAlerts: () => readAlerts(),
     fmt, severityOf,
 
     start() {
       readFleet()
       scheduleFleet(FLEET_POLL_MS)
-      historyTimer = setInterval(readHistory, HISTORY_POLL_MS)
-      alertTimer = setInterval(readAlerts, ALERT_POLL_MS)
-      predictTimer = setInterval(() => { if (fires[selectedId.value]?.active) runPrediction() }, PREDICT_POLL_MS)
-      lstmTimer = setInterval(() => lstmService.checkHealth(true), 30000)
+      historyTimer = setInterval(() => { if (!document.hidden) readHistory() }, HISTORY_POLL_MS)
+      alertTimer = setInterval(() => { if (!document.hidden) readAlerts() }, ALERT_POLL_MS)
+      predictTimer = setInterval(() => {
+        if (!document.hidden && fires[selectedId.value]?.active) runPrediction()
+      }, PREDICT_POLL_MS)
+      // 不强制刷新：lstmService 自带 30s 健康缓存，强探会把缓存永远击穿，
+      // 相当于每 30 秒多打一次 /health。
+      lstmTimer = setInterval(() => { if (!document.hidden) lstmService.checkHealth() }, 30000)
       readAlerts()
       readEngineInfo()
       readHistory()
-      lstmService.checkHealth(true).then(ok => { lstm.available = ok })
+      lstmService.checkHealth().then(ok => { lstm.available = ok })
       fetchModels()
     },
 

@@ -123,6 +123,7 @@
     "temperature": { "warn": 200, "crit": 400, "max": 800, "unit": "℃" },
     "smoke": { "warn": 20, "crit": 45, "max": 100, "unit": "%" },
     "oxygen": { "warn": 19, "crit": 16, "min": 8, "unit": "%" },
-    "co": { "warn": 50, "crit": 150, "max": 500, "unit": "ppm" }
+    "co": { "warn": 50, "crit": 150, "max": 500, "unit": "ppm" },
+    "co2": { "warn": 15000, "crit": 50000, "max": 60000, "unit": "ppm", "$comment": "1.5% 起警 / 5% IDLH 量级；训练工况烟气层 CO₂ 峰约 3~4%" }
   }
 }

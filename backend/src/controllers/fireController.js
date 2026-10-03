@@ -7,7 +7,7 @@ import * as sim from '../services/fireSimulation.js'
 
 const { FireEvent, FireData, Alert, Compartment } = db
 
-/** 允许的指令集合 —— 二期之前只认 start/stop，suppress/evacuate/reset 全被 400 拒掉 */
+/** 允许的指令集合 */
 const ACTIONS = ['start', 'stop', 'suppress', 'evacuate', 'reset']
 
 /* ------------------------------------------------------------------ */
@@ -43,22 +43,27 @@ export const getCompartmentFireData = asyncHandler(async (req, res) => {
       fire: {
         active: status.active,
         fireId: status.fireId,
-        elapsedSeconds: Math.round(status.elapsed),
+        elapsedSeconds: status.elapsedSeconds,
         suppressed: status.suppressed,
         evacuated: status.evacuated,
-        severity: Number(status.severity.toFixed(3))
+        severity: Number(status.severity.toFixed(3)),
+        // 演化停摆标记：读数冻结时前端必须能区分"火稳住了"和"引擎挂了"
+        evolutionStalled: status.evolutionStalled
       },
       temperature: Number(reading.temperature.toFixed(1)),
       smoke: Number(reading.smoke.toFixed(1)),
       oxygen: Number(reading.oxygen.toFixed(1)),
       co: Number(reading.co.toFixed(0)),
-      co2: 400 + Math.round(reading.temperature * 2.5),
+      // 演化引擎解码出的真实 CO₂。旧版在这里用"400 + 温度×2.5"现造一个，
+      // 把 decode 出来的实测值直接丢弃 —— 展示值与落库值不一致，属于编数。
+      co2: Math.round(Number.isFinite(reading.co2) ? reading.co2 : 400),
       // 各项是否越限，前端可直接用来上色
       thresholds: {
         temperature: levelOf('temperature', reading.temperature),
         smoke: levelOf('smoke', reading.smoke),
         oxygen: levelOf('oxygen', reading.oxygen),
-        co: levelOf('co', reading.co)
+        co: levelOf('co', reading.co),
+        co2: levelOf('co2', reading.co2)
       },
       source: status.active ? 'simulation' : 'sensor',
       timestamp: latest?.timestamp || new Date()
@@ -84,7 +89,7 @@ export const getFleetStatus = asyncHandler(async (req, res) => {
   const items = ALL_COMPARTMENTS().map(spec => {
     const reading = sim.currentReading(spec.id) || spec.base
     const st = sim.fireStatus(spec.id)
-    const worst = ['temperature', 'smoke', 'oxygen', 'co']
+    const worst = ['temperature', 'smoke', 'oxygen', 'co', 'co2']
       .map(m => levelOf(m, reading[m]))
       .reduce((a, b) => rank(b) > rank(a) ? b : a, 'info')
     return {
@@ -98,6 +103,8 @@ export const getFleetStatus = asyncHandler(async (req, res) => {
       smoke: Number(reading.smoke.toFixed(1)),
       oxygen: Number(reading.oxygen.toFixed(1)),
       co: Number(reading.co.toFixed(0)),
+      co2: Math.round(Number.isFinite(reading.co2) ? reading.co2 : 400),
+      evolutionStalled: st.evolutionStalled,
       overall: worst,
       risk: spec.risk
     }
@@ -136,7 +143,8 @@ const rank = l => ({ info: 0, low: 1, medium: 2, high: 3, critical: 4 }[l] ?? 0)
 
 export const controlFire = asyncHandler(async (req, res) => {
   const { compartmentId } = req.params
-  const { action, intensity = 0.6, spreadRate = 0.1 } = req.body || {}
+  const body = req.body || {}
+  const { action } = body
 
   if (!ACTIONS.includes(action)) {
     return res.status(400).json({
@@ -147,6 +155,15 @@ export const controlFire = asyncHandler(async (req, res) => {
 
   const spec = getCompartment(compartmentId)
   if (!spec) return res.status(404).json({ success: false, message: '舱室不存在' })
+
+  // intensity/spreadRate 直接进 FLOAT 列，必须先钳到合法域，
+  // 不能信任请求体里的任意数值。
+  const numIn = (v, dflt, lo, hi) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt
+  }
+  const intensity = numIn(body.intensity, 0.6, 0.05, 1)
+  const spreadRate = numIn(body.spreadRate, 0.1, 0, 1)
 
   const before = sim.fireStatus(spec.id)
 

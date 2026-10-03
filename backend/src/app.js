@@ -52,9 +52,13 @@ app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
 // 速率限制
+// 默认值必须覆盖自家前端的正常轮询：fleet 2s + history 2s + alerts 5s
+// + predict 10s + LSTM 健康 30s ≈ 78 req/min ≈ 1170 req/15min。
+// 旧默认 1000 比前端正常速率还低，跑约 13 分钟后开始周期性 429。
+// 可用 RATE_LIMIT_MAX 环境变量覆盖。
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分钟
-  max: 1000, // 限制每个IP 15分钟内最多1000个请求
+  max: Number(process.env.RATE_LIMIT_MAX) || 5000,
   message: '请求过于频繁，请稍后再试'
 })
 app.use('/api/', limiter)
@@ -90,10 +94,18 @@ async function startServer() {
     await sequelize.authenticate()
     logger.info('数据库连接成功')
 
-    // 同步数据库模型（开发环境）
+    // 同步数据库模型（开发环境）。
+    // alter:true 会把新增列（如 fire_events.suppressed/evacuated/modelSteps）
+    // 补进已有表 —— 普通.sync() 对已存在的表不做任何事，新列永远加不上。
+    // alter 失败（如表结构漂移过大）只告警不退出：老库还能按旧列跑，
+    // 只是丢"重启恢复/指令落库"这两项持久化能力。
     if (process.env.NODE_ENV === 'development') {
-      await sequelize.sync({ alter: false })
-      logger.info('数据库模型同步完成')
+      try {
+        await sequelize.sync({ alter: true })
+        logger.info('数据库模型同步完成')
+      } catch (e) {
+        logger.warn('数据库结构同步失败（可运行 npm run init-db 重建）', { message: e.message })
+      }
     }
 
     // 启动火灾演化引擎（常驻推演所有活跃火灾并写入 fire_data）

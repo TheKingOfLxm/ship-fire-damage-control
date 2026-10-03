@@ -6,7 +6,6 @@ import ToastHost from '@/components/ToastHost.vue'
 import { useFireStore } from '@/stores/fire'
 import { provideOpsConsole } from '@/composables/useOpsConsole'
 import { useToast } from '@/composables/useToast'
-import { COMPARTMENTS } from '@/config/shipLayout'
 import Logger from '@/utils/logger'
 
 const fireStore = useFireStore()
@@ -140,7 +139,6 @@ onBeforeUnmount(() => {
       :is-fire-active="isFireActive"
       :busy="busy"
       :is-open="panelOpen.right"
-      :compartments="COMPARTMENTS"
       @select-compartment="handleSelectCompartment"
       @toggle-fire="toggleFire"
       @suppress-fire="suppressFire"

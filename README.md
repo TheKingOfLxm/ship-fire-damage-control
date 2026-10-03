@@ -149,7 +149,7 @@ py -3 tools/selftest_server.py         # 服务自检，21 项
                     └──> Three.js 渲染           └──> models_v6/*.pth
 ```
 
-演化链路的推进方式：后端每 1 秒按**实际经过的墙钟时间**向 5001 请求一步，5001 用该舱室的真实火灾轨迹作为状态基准，模型在其上做前向推理，返回温度/CO/CO₂。返回值写回数据库，前端轮询展示。
+演化链路的推进方式：后端每 1 秒按**实际经过的墙钟时间**向 5001 请求一步。5001 每个 tick 都把输入窗口**再锚定**到该舱室的真实 FDS 轨迹（游标随仿真时间前进），LSTM 在锚定后的窗口上做前向，返回温度/CO/CO₂。换句话说：**FDS 轨迹提供"火灾处于什么状态"，LSTM 负责算出这个状态下的读数细节**——报出去的数是模型前向算出来的，但火灾的整体走向由训练轨迹决定。返回值写回数据库，前端轮询展示。LSTM 服务 15 秒没推进成功时，前端会显示"演化停摆"横幅，区分"火稳住了"和"引擎挂了"。
 
 ---
 
@@ -197,8 +197,8 @@ copy config\.env.example config\.env.development
 ⚠️ 模板里 `VITE_LSTM_BASE_URL` 必须是 **5001**（与 `server.py` 的 `app.run(port=5001)` 一致）。
 写成 5000 会让健康检查一直失败、预测全部走降级，而且**不报任何错**。
 
-AI 分析功能需要 `VITE_AI_API_KEY`（GLM 智谱 或 通义千问）。**不填也能跑**，
-只是 AI 面板会走降级分析。
+AI 分析功能的密钥配在**后端** `backend/.env`（`AI_API_KEY` 智谱 / `AI_QWEN_API_KEY` 通义）——
+AI 请求由后端代理转发，密钥不进前端 bundle。**不填也能跑**，只是 AI 面板会走降级分析。
 
 ### 3.3 安装依赖
 
@@ -231,8 +231,11 @@ pip install "torch>=2.5" "flask>=2.2" flask-cors \
 cd backend && npm run init-db && cd ..
 ```
 
-这一步会 **`sync({ force: true })` 删表重建**，再灌入一艘默认船和五个舱室。
-⚠️ 会清空现有数据，只在首次部署时跑。
+这一步会 **`sync({ force: true })` 删表重建**，再按 `config/compartments.json`
+（唯一权威定义）灌入一艘默认船和五个舱室，并**显式写入配置里的 id** ——
+数据库编号与前后端完全一致，不存在错位。
+⚠️ 会清空现有数据，只在首次部署时跑。日常对齐（不删数据）用
+`cd backend && node src/scripts/syncLayout.js`。
 
 ### 3.5 启动三个服务
 
@@ -331,6 +334,17 @@ prediction  = pred_scaled * channel_std + channel_mean        # 再还原物理�
 
 **④ 逐拍推进依赖引擎 tick 速率。** 若机器负载过高，演化会慢于真实时间。后端已改为按实际墙钟时间推进，代价是一次最多推 20 步（模型单次前向上限）。
 
+**⑤ 灭火指令：干预模型舱为真反事实，其余舱为运维层叠加。** v7（4 通道，
+含灭火状态 S）模型的舱室，`suppress` 的响应由模型给出——训练数据含三档
+灭火干预工况（增长期强扑/中效/扑晚了）。仍是 v6 模型的舱室走运维层叠加
+（显示层回落），不能预测扑救后的反事实。`/api/engine/info` 的
+`interventionCompartments` 如实列出两种舱室。灭火干预的建模范式见 §6
+（规定释热 ramp × 指数衰减包络，非水喷淋 CFD）。
+
+**⑥ 烟雾与氧气是推导值，不是模型输出。** 模型只输出温度/CO/CO₂ 三个通道；界面上的烟雾（与温度/CO₂ 正相关）与氧气（按 CO₂ 上升比例反推耗氧）是代理公式算出来的推导值，前端图表脚注与引擎能力说明均已标注。
+
+**⑦ 五个舱室是五个独立模型，不含舱间耦合。** 没有隔壁导热、没有门状态、没有烟气蔓延路径——"要不要封隔壁"这个问题当前架构回答不了。要回答它需要多舱耦合建模（区域模型或多舱 FDS 工况）。
+
 ---
 
 ## 6. 重新训练 / 重新生成数据
@@ -338,11 +352,41 @@ prediction  = pred_scaled * channel_std + channel_mean        # 再还原物理�
 ### 重新训练模型
 
 ```bash
-RETRAIN_V6_FOLDS=1 py -3 tools/retrain_v6.py            # 全部舱室
+RETRAIN_V6_FOLDS=1 py -3 tools/retrain_v6.py            # 全部舱室（v6，无干预）
 RETRAIN_V6_FOLDS=1 py -3 tools/retrain_v6.py 灶炉间      # 单个舱室
 ```
 
-`RETRAIN_V6_FOLDS` 限制交叉验证折数（留一验证每折要完整训一遍，5 工况约 90 分钟）。产物落在 `models_v6/<舱室>/best_model.pth`，服务端重启后自动加载（优先级 `models_v6 > models_v3 > models_v2`）。
+`RETRAIN_V6_FOLDS` 限制交叉验证折数（留一验证每折要完整训一遍，5 工况约 90 分钟）。产物落在 `models_v6/<舱室>/best_model.pth`，服务端重启后自动加载（优先级 `models_v7 > models_v6 > models_v3 > models_v2`）。
+
+### 含灭火干预的训练数据（v7）—— 回答"这个舱还能扑吗"
+
+v6 的训练数据全是"没人灭火"的轨迹，`suppress` 指令只能做运维层叠加。
+v7 把灭火干预变成模型的**第 4 个输入通道** S（灭火剂投放状态 0→1），
+让模型学"状态 + 动作 → 演化"：
+
+```bash
+# 1. 生成干预算例（对火 ramp 乘灭火包络 max(floor, exp(-(t-t_s)/tau))，
+#    三档：增长期强扑 / 充分发展期中效 / 扑晚了弱效，每舱 3 个）
+py -3 tools/gen_suppression.py
+
+# 2. 排队跑 FDS（2 并发，灭火算例火弱、单条约 2~10 分钟）
+py -3 tools/fds_queue.py suppress
+
+# 3. 训练 v7（旧工况 S≡0 + 干预工况 S(t) 由 manifest 精确重构；
+#    留出一个干预算例验证"模型能否从 S 通道推出没见过的扑法"）
+RETRAIN_V7_FOLDS=1 py -3 tools/retrain_v7.py
+```
+
+产物 `models_v7/<舱室>/best_model.pth`（input_dim=4），服务端自动优先加载。
+加载后：后端把当前灭火状态填进 S 通道，`suppress` 的响应**由模型给出**
+（engineInfo 的 `interventionCompartments` 列出哪些舱生效）；旧模型舱室
+仍走运维层叠加。`/api/lstm/projection` 新增 `suppression` 参数，可做
+反事实对照投影（扑 vs 不扑两条曲线）。
+
+**建模范式披露**：灭火干预编码为对规定释热 ramp 乘指数衰减包络
+（等效于 FDS `E_COEFFICIENT` 的思想，干预时刻由算例参数显式控制），
+FDS 仿真的是 HRR 降低的**后果**（层温回落、产气率下降）—— 这正是
+模型要学的干预响应。它不是水滴蒸发冷却的 CFD 模拟。
 
 训练管线内置**完整性闸门**：点数不等于 3601、或文件在 15 分钟内被写过，一律跳过。FDS 是边跑边追加输出的，中途取文件会拿到半截轨迹——它在增长段戛然而止，模型会把它当成"接下来该降温"的规律学进去。
 
@@ -453,7 +497,7 @@ py -3 tools/convert_growth.py 主机舱   # FDS devc -> 训练格式 + 增长段
 
 | 现象 | 原因 |
 |---|---|
-| **起火后温度一直卡在基值不动** | ① 检查 5001 是否真在跑：`curl -s localhost:5001/api/lstm/health`；② 检查后端日志有没有 `timeout of 15000ms exceeded`，有就是演化请求超时，示数会冻结 |
+| **起火后温度一直卡在基值不动** | ① 检查 5001 是否真在跑：`curl -s localhost:5001/api/lstm/health`；② 检查后端日志有没有 `timeout of 15000ms exceeded`，有就是演化请求超时，示数会冻结（此时前端会显示"演化停摆"横幅） |
 | 温度爬升但很慢 | 机器负载过高导致 tick 变慢。已改为按墙钟时间推进；若仍慢，看 `backend_out.txt` |
 | 前端显示降级横幅 | 该舱室还是旧配方模型。查 `/api/lstm/health` 的 `degraded_compartments` |
 | 逐拍读数 ±10~15℃ 抖动 | 已知限制，见 §5②。起火最陡的 30 秒内最明显 |

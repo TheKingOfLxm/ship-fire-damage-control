@@ -13,8 +13,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sklearn.preprocessing import StandardScaler
 
-# 添加模型路径
-PYROSIM_LSTM_PATH = r"D:\PyrosimLSTM"
+# 添加模型路径（原始 30 秒 checkpoint 的兜底位置，仅开发机存在；
+# models_v6 命中时不会用到。可用环境变量覆盖）
+PYROSIM_LSTM_PATH = os.environ.get('PYROSIM_LSTM_PATH', r'D:\PyrosimLSTM')
 sys.path.insert(0, PYROSIM_LSTM_PATH)
 
 app = Flask(__name__)
@@ -154,7 +155,10 @@ class FirePredictor:
     def _load_all_models(self):
         """加载所有可用的模型。
 
-        优先级 models_v6 > models_v3 > models_v2 > 原始 checkpoint：
+        优先级 models_v7 > models_v6 > models_v3 > models_v2 > 原始 checkpoint：
+          v7  v6 配方 + 第 4 输入通道（灭火状态 S），训练数据含灭火干预工况，
+              能回答"投入灭火后火会怎么走"的反事实；干预通道语义见
+              checkpoint 的 intervention 字段；
           v6  多工况 + 增量目标 + 0.5s 网格，留出工况泛化误差 3.8℃，
               模型对输入有响应（v4 那版喂什么都吐同一个数）；
           v3  用 30 分钟 FDS 轨迹重训，但训练数据是**阶跃**的
@@ -174,7 +178,8 @@ class FirePredictor:
             print(f"[INFO] 模型搜索路径被 LSTM_MODEL_ROOTS 覆盖: "
                   f"{[os.path.basename(r.rstrip(os.sep)) for r in roots]}")
         else:
-            roots = [os.path.join(base, '..', 'models_v6'),
+            roots = [os.path.join(base, '..', 'models_v7'),
+                     os.path.join(base, '..', 'models_v6'),
                      os.path.join(base, '..', 'models_v3'),
                      os.path.join(base, '..', 'models_v2')]
         for compartment_name, model_dir in self.COMPARTMENT_MODEL_MAP.items():
@@ -188,7 +193,8 @@ class FirePredictor:
                 continue
             try:
                 norm = model_path.replace('\\', '/')
-                self._current_tag = ('v6' if 'models_v6' in norm
+                self._current_tag = ('v7' if 'models_v7' in norm
+                                     else 'v6' if 'models_v6' in norm
                                      else 'v3' if 'models_v3' in norm
                                      else 'v2' if 'models_v2' in norm
                                      else '原始')
@@ -253,6 +259,12 @@ class FirePredictor:
             source=self._current_tag,
             seq_len=seq_len, pred_len=pred_len,
             step_seconds=step_s,
+            input_dim=input_dim, output_dim=output_dim,
+            # v7 干预通道：input_dim=4 时第 4 列是灭火状态 S（0→1），
+            # 由调用方按当前灭火进度填充。evolve/forecast/projection
+            # 都会据此构造窗口列。
+            intervention=checkpoint.get('intervention') or None,
+            intervention_channel=input_dim >= 4,
             trained_horizon_seconds=checkpoint.get('trained_horizon_seconds', 30.0),
             # 单次前向的可靠时长 = pred_len × 采样间隔。这和
             # trained_horizon_seconds 是**两件事**：
@@ -323,7 +335,17 @@ class FirePredictor:
         # 套用全局 150 会让形状对不上或悄悄丢掉真实历史。
         shape = self.model_shapes.get(resolved) or {}
         seq_len = shape.get('seq_len', self.config['sequence_length'])
-        input_array = np.array(input_sequence)
+        input_dim = int(shape.get('input_dim') or 3)
+        input_array = np.array(input_sequence, dtype=float)
+        # v7 干预模型有第 4 列（灭火状态 S）。调用方没给就补 0（未干预）；
+        # 多给的列截到模型宽度。
+        if input_array.ndim == 2:
+            if input_array.shape[1] < input_dim:
+                pad = np.zeros((input_array.shape[0],
+                                input_dim - input_array.shape[1]))
+                input_array = np.hstack([input_array, pad])
+            elif input_array.shape[1] > input_dim:
+                input_array = input_array[:, :input_dim]
         if input_array.shape[0] < seq_len:
             # 如果数据不足，用最后一个值填充
             padding_length = seq_len - input_array.shape[0]
@@ -357,27 +379,30 @@ class FirePredictor:
     def decode_raw(self, compartment_name, out, input_scaled):
         """把模型原始输出解码成物理量 —— 全服务唯一的解码入口。
 
-        增量目标（v6）下模型输出的是「相对输入末值的增量」，要连着做
+        增量目标（v6/v7）下模型输出的是「相对输入末值的增量」，要连着做
         两次还原：先加回输入末值得到绝对值，再用通道均值方差还原物理量。
         漏掉任何一步都会得到 0℃ / 40% CO2 这种物理上不可能的数。
 
-        早先只有 `_predict` 做了这件事，`/evolve`、`/forecast`、
-        `/projection` 三个自回归端点都绕过它直接 inverse_transform，
-        把增量当成绝对值还原 —— 前端那条各舱演化曲线（灶炉间 356→338→
-        338→345 之类）整个是假的。三个端点现在统一走这里。
+        v7 的输入是 4 通道（含灭火状态 S）而输出只有 3 个物理通道：
+        增量基准取输入末行的**前 output_dim 列**，统计量同样只取前
+        output_dim 维 —— 拿 4 维末行直接加会把 S 混进温度增量。
 
         Args:
-            out:          模型原始输出 (pred_len, 3)
-            input_scaled: 本次输入窗口的**标准化**结果 (seq_len, 3)；
+            out:          模型原始输出 (pred_len, output_dim)
+            input_scaled: 本次输入窗口的**标准化**结果 (seq_len, input_dim)；
                           增量目标要加回的是它的末行
         """
         resolved = self._resolve_name(compartment_name)
         shape = self.model_shapes.get(resolved) or {}
+        out = np.asarray(out, dtype=float)
+        n_out = out.shape[-1]
         if shape.get('target') == 'delta':
-            delta = np.asarray(out) * np.asarray(shape['delta_std'])
-            pred_scaled = delta + np.asarray(input_scaled)[-1, :]
-            return pred_scaled * np.asarray(shape['channel_std']) \
-                + np.asarray(shape['channel_mean'])
+            delta = out * np.asarray(shape['delta_std'])[:n_out]
+            pred_scaled = delta + np.asarray(input_scaled)[-1, :n_out]
+            ch_std = np.asarray(shape['channel_std'])[:n_out]
+            ch_mean = np.asarray(shape['channel_mean'])[:n_out]
+            return pred_scaled * ch_std + ch_mean
+        # 绝对值目标（v2/v3）：scaler 维度与输出一致，走原路
         return self.scalers[resolved].inverse_transform(out)
     
     def get_available_compartments(self):
@@ -400,7 +425,7 @@ class FirePredictor:
         """
         out = {}
         for name, shape in self.model_shapes.items():
-            if shape.get('source') != 'v6':
+            if shape.get('source') not in ('v6', 'v7'):
                 out[name] = {
                     'source': shape.get('source'),
                     'reliableHorizonSeconds': shape.get('reliable_horizon_seconds'),
@@ -408,6 +433,22 @@ class FirePredictor:
                               '自回归外推会收敛到常数平台',
                 }
         return out
+
+
+# ============== 推导通道（非模型输出，必须如实标注） ==============
+# 模型只输出温度/CO/CO2 三个通道。烟雾与氧气是**推导值**：
+# 与后端 fireSimulation.js decode() 用同一套代理公式，保证两侧面板
+# 数值一致。它们不是模型输出，各端点会在响应里附 derivedChannels
+# 说明来源 —— 不能把推导值冒充成预测通道。
+DERIVED_CHANNELS = ['smoke', 'oxygen']
+
+
+def derived_smoke_oxygen(temp_c, co2_mol):
+    """由模型三通道推导展示用烟雾/氧气（与后端 decode 同一公式）。"""
+    co2_ppm = co2_mol * 1e6
+    o2 = max(8.0, min(20.9, 20.9 - (co2_ppm - 400) / 20000 * 9.5))
+    smoke = max(0.0, min(100.0, (temp_c - 20) / 400 * 100))
+    return round(smoke, 2), round(o2, 2)
 
 
 # ============== 全局预测器实例 ==============
@@ -557,14 +598,15 @@ def predict():
                 clamped += 1
             co_ppm = min(co * 1e6, 50000.0)
             co2_ppm = min(co2 * 1e6, 300000.0)
+            smoke_v, oxygen_v = derived_smoke_oxygen(temp, co2)
             predictions.append({
                 'time': round(i * time_step, 2),
                 'temperature': round(temp, 2),
                 'co': round(co_ppm, 4),        # ppm
                 'co2': round(co2_ppm, 4),      # ppm
-                # 为了与前端兼容，添加烟雾和氧气的估算值
-                'smoke': round(min(co2_ppm * 10, 100.0), 2),   # 估算烟���浓度
-                'oxygen': round(max(8.0, min(21.0, 21 - temp / 100)), 2)  # 估算氧气浓度
+                # 烟雾/氧气为推导值（非模型输出），来源见 derived_smoke_oxygen
+                'smoke': smoke_v,
+                'oxygen': oxygen_v
             })
         
         # 计算摘要信息
@@ -606,11 +648,13 @@ def predict():
                     'maxCO': round(max_co, 4),
                     'riskLevel': risk_level,
                     'trend': trend,
-                    'predictionDuration': round(len(predictions) * time_step, 2),
-                    # 被物理钳制修正过的点数 —— 非 0 说明模型在有效域外，
-                    # 前端应当提示"部分数值已按物理范围修正"，不能装作原样输出
-                    'clampedPoints': clamped,
-                    'compartmentName': compartment_name
+                'predictionDuration': round(len(predictions) * time_step, 2),
+                # 被物理钳制修正过的点数 —— 非 0 说明模型在有效域外，
+                # 前端应当提示"部分数值已按物理范围修正"，不能装作原样输出
+                'clampedPoints': clamped,
+                # 烟雾/氧气不是模型输出，是推导值，必须告知调用方
+                'derivedChannels': DERIVED_CHANNELS,
+                'compartmentName': compartment_name
                 }
             },
             'message': '预测成功'
@@ -664,6 +708,11 @@ def get_config():
                     'seqLen': v.get('seq_len'),
                     'predLen': v.get('pred_len'),
                     'stepSeconds': v.get('step_seconds'),
+                    'inputDim': v.get('input_dim'),
+                    # v7 干预模型：第 4 输入通道是灭火状态，evolve/projection
+                    # 可传 suppression 做反事实投影。后端据此决定是否跳过
+                    # 显示层灭火叠加（避免双重压制）。
+                    'interventionChannel': bool(v.get('intervention_channel')),
                     'reliableHorizonSeconds': v.get('reliable_horizon_seconds'),
                     'target': v.get('target'),
                     'inputSeconds': round((v.get('seq_len') or 0) * v.get('step_seconds', 0.1), 2),
@@ -717,7 +766,7 @@ _steps_since_anchor = {}
 
 
 def seed_from_training_data(compartment_name, seq_len, offset=0, align_to=None,
-                            step_seconds=None):
+                            step_seconds=None, s_fill=None):
     """
     从该舱室的真实训练轨迹取一段作为起火/再锚定窗口。
 
@@ -727,6 +776,10 @@ def seed_from_training_data(compartment_name, seq_len, offset=0, align_to=None,
 
     解决办法是**再锚定**：一旦检测到收敛，就把窗口换成真实轨迹的下一段，
     让模型继续在自身分布内演化。这样每一步仍由 LSTM 生成，但不会塌缩。
+
+    s_fill：v7 干预模型需要第 4 列（灭火状态 S）。训练轨迹本身没有这一列
+    （它由 manifest 参数构造），播种时用调用方给的当前灭火水平填整列 ——
+    窗口 30 秒、灭火剂 10 秒到位，常数近似在介入稳定后是分布内的。
     """
     folder = FirePredictor.COMPARTMENT_MODEL_MAP.get(compartment_name, 'zjc.LSTM(new)')
     real_name = FirePredictor.NAME_ALIASES.get(compartment_name, compartment_name)
@@ -830,6 +883,8 @@ def seed_from_training_data(compartment_name, seq_len, offset=0, align_to=None,
     if seq.shape[0] < seq_len:
         pad = np.repeat(seq[:1], seq_len - seq.shape[0], axis=0)
         seq = np.vstack([pad, seq])
+    if s_fill is not None:
+        seq = np.hstack([seq, np.full((len(seq), 1), float(s_fill))])
     return seq.tolist(), arr.shape[0]
 
 
@@ -929,9 +984,9 @@ def evolve():
     请求体:
     {
         "compartmentName": "主机舱",
-        "window": [[温度, co, co2], ...],   // 可选；不传则用 base 播种
+        "window": [[温度, co, co2], ...],   // 可选；不传则用训练轨迹播种
         "steps": 10,                        // 本次推进步数
-        "base": {"temperature": 45, "co": 0, "co2": 400}
+        "suppression": 0.0                  // 可选，当前灭火状态 0..1（v7 干预模型消费）
     }
 
     响应:
@@ -949,7 +1004,6 @@ def evolve():
         compartment_name = data.get('compartmentName', '主机舱')
         steps = int(data.get('steps', 1))
         steps = max(1, min(STEPS_MAX_PER_CALL, steps))
-        base = data.get('base') or {}
         window_in = data.get('window')
         reanchor = bool(data.get('reanchor', False))
         reanchor_offset = int(data.get('reanchorOffset', 0))
@@ -961,9 +1015,13 @@ def evolve():
         # 塌缩阈值：window_variance 返回的是**比值**（末段方差/整窗方差），
         # 正常演化时约 0.1~0.9，趋近 0 才是真的压平。
         # 早先这里沿用了老版「温度绝对方差」语义的 0.02，把 0.1 的正常比值
-        # 也判成塌缩 -> 每一 tick 都在再锚定 -> 等于回放训练轨迹而不是演化。
+        # 也判成塌缩 -> 每 tick 都在再锚定 -> 等于回放训练轨迹而不是演化。
         # 阈值取 0.01：只有比值跌破 1% 才认为确实不动了。
         collapse_var = float(data.get('collapseVariance', COLLAPSE_RATIO))
+        # 当前灭火状态（0..1，调用方按灭火剂到位进度给）。
+        # v7 干预模型把它填进第 4 输入通道，输出即是扑救后的演化；
+        # 旧 3 通道模型不消费这个值（后端对旧模型走显示层叠加方案）。
+        suppression = min(1.0, max(0.0, float(data.get('suppression') or 0.0)))
 
         pred = get_predictor()
         # 窗口长度按该模型自己的结构取，不能套用全局 150
@@ -971,6 +1029,8 @@ def evolve():
         sample_dt = pred.sampling_interval(compartment_name)
         _shape = pred.model_shapes.get(pred._resolve_name(compartment_name)) or {}
         pred_len = int(_shape.get('pred_len') or seq_len)
+        n_in = int(_shape.get('input_dim') or 3)
+        s_seed = suppression if n_in >= 4 else None
         # steps 不能超过该模型一次前向能吐出的步数。
         # 主机舱 v2 的 pred_len 只有 15，请求 20 步时 decoded 只有 15 行，
         # `decoded[s]` 越界 -> HTTP 500。全局上限 20 挡不住这个，
@@ -1014,7 +1074,7 @@ def evolve():
         # 火灾过程，模型负责在这个真实状态上算出下一段读数。
         seeded, trace_len = seed_from_training_data(compartment_name, seq_len,
             offset=cursor + (reanchor_offset if reanchor else 0),
-                step_seconds=sample_dt)
+                step_seconds=sample_dt, s_fill=s_seed)
         if seeded:
             window_in = seeded
             anchored = True
@@ -1024,8 +1084,8 @@ def evolve():
             return jsonify({'code': 400, 'message': '无法播种：缺少训练轨迹'}), 400
 
         window = np.array(window_in, dtype=object)
-        if window.ndim != 2 or window.shape[1] != 3:
-            return jsonify({'code': 400, 'message': 'window 形状应为 (N,3)'}), 400
+        if window.ndim != 2 or window.shape[1] not in (3, n_in):
+            return jsonify({'code': 400, 'message': f'window 形状应为 (N,{n_in})'}), 400
         # 净化：上游读数里可能混入 null/NaN（前端重采样会产生 NaN，
         # 序列化成 JSON 就是 null）。不清理的话 np.float64 转换直接抛错，
         # 整个演化链路静默停摆。
@@ -1045,13 +1105,17 @@ def evolve():
             window = np.array(cleaned, dtype=np.float64)
         if not np.isfinite(window).all():
             # 逐列用该列的中位数填补，保留趋势形状
-            for c in range(3):
+            for c in range(window.shape[1]):
                 col = window[:, c]
                 bad = ~np.isfinite(col)
                 if bad.any():
                     good = col[~bad]
                     fill = float(np.median(good)) if good.size else 0.0
                     col[bad] = fill
+        # 旧后端发来的 3 列窗口 + v7 干预模型：补上 S 列（用当前灭火水平）
+        if n_in >= 4 and window.shape[1] == 3:
+            window = np.hstack([window,
+                                np.full((len(window), 1), suppression)])
         if window.shape[0] > seq_len:
             window = window[-seq_len:]
         elif window.shape[0] < seq_len:               # 不足则用首点前补
@@ -1068,7 +1132,7 @@ def evolve():
                 _align = float(window[0, 0])      # 窗口最新值（最新在前）
             except Exception:
                 _align = None
-            seeded, trace_len = seed_from_training_data(compartment_name, seq_len, offset=cursor, align_to=_align, step_seconds=sample_dt)
+            seeded, trace_len = seed_from_training_data(compartment_name, seq_len, offset=cursor, align_to=_align, step_seconds=sample_dt, s_fill=s_seed)
             if seeded:
                 window = np.array(seeded, dtype=np.float64)
                 anchored = True
@@ -1108,7 +1172,10 @@ def evolve():
             if not all(np.isfinite(row)) or row[0] < -1 or row[0] > 1400:
                 diverged = True
             produced.append(row)
-            buf = np.vstack([np.array(row)[None, :], buf[:-1]])
+            # 回灌窗口：v7 模型要把当前灭火状态一并写回第 4 列，
+            # 闭环自回归时模型才能持续"看到"干预在进行
+            row_full = row + ([suppression] if n_in >= 4 else [])
+            buf = np.vstack([np.array(row_full)[None, :], buf[:-1]])
 
         # 温度不该低于环境。模型外推跑飞时会给出负值，早先直接钳到 0℃
         # 发给前端（灶炉间实测 24.5→6.4→0.0 的下跌），那不是火灾。
@@ -1121,12 +1188,12 @@ def evolve():
                 _align2 = float(window[0, 0])
             except Exception:
                 _align2 = None
-            seeded, trace_len = seed_from_training_data(compartment_name, seq_len, offset=cursor, align_to=_align2, step_seconds=sample_dt)
+            seeded, trace_len = seed_from_training_data(compartment_name, seq_len, offset=cursor, align_to=_align2, step_seconds=sample_dt, s_fill=s_seed)
             if seeded:
                 buf = np.array(seeded, dtype=np.float64)
                 _reanchor_cursor[compartment_name] = cursor + seq_len
                 _steps_since_anchor[compartment_name] = 0
-                produced = [list(map(float, buf[0]))]
+                produced = [list(map(float, buf[0][:3]))]
         if not anchored:
             _steps_since_anchor[compartment_name] = since + steps
 
@@ -1153,7 +1220,10 @@ def evolve():
                     'reliableHorizonSeconds': _shape.get('reliable_horizon_seconds'),
                     'stepsSinceAnchor': int(_steps_since_anchor.get(compartment_name, 0)),
                     'anchorCursor': int(_reanchor_cursor.get(compartment_name, 0)),
-                    'inputTempRange': seed_temp_range
+                    'inputTempRange': seed_temp_range,
+                    # 干预通道：本模型是否消费 suppression、以及本次用了多少
+                    'interventionChannel': n_in >= 4,
+                    'suppression': suppression,
                 }
             },
             'message': 'success'
@@ -1186,24 +1256,33 @@ def forecast():
         history = data.get('historyData') or []
         horizon = float(data.get('horizonSeconds', 60) or 60)
         horizon = max(5.0, min(horizon, 300.0))
+        # 反事实灭火水平（0..1）："如果按这个力度灭火，火会怎么走"。
+        # 仅 v7 干预模型消费；历史点里也可逐点带 suppression 覆盖。
+        sup_level = min(1.0, max(0.0, float(data.get('suppression') or 0.0)))
 
         pred = get_predictor()
         seq_len = pred.seq_len_of(compartment_name)
         dt = pred.sampling_interval(compartment_name)
         dead = dead_channels_of(compartment_name)
+        _shape = pred.model_shapes.get(pred._resolve_name(compartment_name)) or {}
+        n_in = int(_shape.get('input_dim') or 3)
+        s_col = sup_level if n_in >= 4 else None
 
         # 播种：用调用方给的历史，否则取真实训练轨迹
         window = None
         if history:
             w = np.array([[float(p.get('temperature', 20)),
                            float(p.get('co', 0) or 0),
-                           float(p.get('co2', 3.9e-4) or 3.9e-4)] for p in history],
+                           float(p.get('co2', 3.9e-4) or 3.9e-4),
+                           min(1.0, max(0.0, float(p.get('suppression') or sup_level)))]
+                          for p in history],
                           dtype=np.float64)
             if w.ndim == 2 and w.shape[0] >= 2:
+                w = w[:, :n_in]
                 window = w[-seq_len:] if w.shape[0] >= seq_len else np.vstack(
                     [np.repeat(w[:1], seq_len - w.shape[0], axis=0), w])
         if window is None:
-            seeded, _ = seed_from_training_data(compartment_name, seq_len, step_seconds=dt)
+            seeded, _ = seed_from_training_data(compartment_name, seq_len, step_seconds=dt, s_fill=s_col)
             if not seeded:
                 return jsonify({'code': 400, 'message': '无法播种：缺少历史与训练轨迹'}), 400
             window = np.array(seeded, dtype=np.float64)
@@ -1242,12 +1321,14 @@ def forecast():
                 if not all(np.isfinite(row)):
                     diverged = True
                 traj.append(row)
-                buf = np.vstack([np.array(row)[None, :], buf[:-1]])
+                # v7 干预模型：回灌行带上 S 列，闭环继续"看到"干预
+                row_full = row + ([sup_level] if n_in >= 4 else [])
+                buf = np.vstack([np.array(row_full)[None, :], buf[:-1]])
 
             # 塌缩则再锚定到真实轨迹的下一段，避免推成一条直线
             if window_variance(buf.tolist(), dead) < COLLAPSE_RATIO:
                 seeded, _ = seed_from_training_data(compartment_name, seq_len, offset=seq_len * (r + 1) // 2,
-                step_seconds=dt)
+                step_seconds=dt, s_fill=s_col)
                 if seeded:
                     buf = np.array(seeded, dtype=np.float64)
                     reanchors += 1
@@ -1257,33 +1338,8 @@ def forecast():
         # 轨迹以固定周期无限重复（实测 45s 之后每 10 步就完全重现一次）。
         # 这种情况继续画下去只是一条平滑的假曲线，比只给 1.5 秒更有害 ——
         # 它看起来权威，其实毫无信息。必须识别出来并截断。
-        def _limit_cycle_at(traj, max_period=60, tol=1e-3):
-            """找出轨迹**开始**周期性重复的位置。
-
-            自回归外推超出训练分布后，LSTM 常收敛到周期解。判据：
-            对某个周期 p，从某一点 j 起 traj[k] ≈ traj[k-p] 对所有 k >= j 成立。
-            只看末尾会漏掉真正的起点（末尾当然在重复，但重复可能几十秒前就开始了），
-            所以对每个候选周期向前扫，取最早的起点。
-            """
-            n = len(traj)
-            if n < 60:
-                return None
-            arr = np.asarray(traj, dtype=float)
-            span = np.maximum(arr.max(axis=0) - arr.min(axis=0), 1e-9)
-            norm = arr / span          # 归一到各通道量程，抵消量纲差异
-            earliest = None
-            for p in range(1, max_period + 1):
-                # diff[i] 对应 traj[i+p] 与 traj[i] 的偏差
-                diff = np.max(np.abs(norm[p:] - norm[:-p]), axis=1)
-                bad = np.nonzero(diff > tol)[0]
-                # 最后一个不满足周期 p 的位置；从它之后起就一直是周期 p
-                last_bad = int(bad[-1]) + p if len(bad) else p
-                if n - last_bad >= 3 * p:      # 之后连续 3 个周期都没再破
-                    if earliest is None or last_bad < earliest:
-                        earliest = last_bad
-            return earliest
-
-        converged_at = _limit_cycle_at(traj)
+        # 判定函数与 /projection 共用模块级 _find_limit_cycle。
+        converged_at = _find_limit_cycle(traj)
         if converged_at is not None:
             traj = traj[:converged_at]
         temps = [row[0] for row in traj]
@@ -1324,13 +1380,14 @@ def forecast():
         out = []
         for i, (T, co, co2) in enumerate(traj):
             t = i * dt
+            smoke_v, oxygen_v = derived_smoke_oxygen(T, co2)
             out.append({
                 'time': round(t, 2),
                 'temperature': round(T, 2),
                 'co': round(min(co * 1e6, 50000.0), 2),
                 'co2': round(min(co2 * 1e6, 300000.0), 2),
-                'smoke': round(min(co2 * 1e6 * 10, 100.0), 2),
-                'oxygen': round(max(8.0, min(21.0, 21 - T / 100)), 2),
+                'smoke': smoke_v,
+                'oxygen': oxygen_v,
                 # 超出训练时域的点单独标出来，前端必须如实区分
                 'extrapolated': bool(t > reliable_h),
             })
@@ -1359,6 +1416,7 @@ def forecast():
                     'converged': converged_at is not None,
                     'convergedAtSeconds': round(converged_at * dt, 1) if converged_at else None,
                     'requestedHorizonSeconds': horizon,
+                    'derivedChannels': DERIVED_CHANNELS,
                 }
             },
             'message': 'success'
@@ -1395,12 +1453,18 @@ def projection():
         history = data.get('historyData') or []
         horizon = float(data.get('horizonSeconds', 900) or 900)
         horizon = max(60.0, min(horizon, 3600.0))
+        # 反事实灭火水平（0..1）：损管问"这个舱还能扑吗"时，前端可以
+        # 分别请求 suppression=0（不扑）与 suppression=1（全力扑）两条
+        # 投影做对照 —— 这是 v7 干预模型的核心用法。仅 4 通道模型消费。
+        sup_level = min(1.0, max(0.0, float(data.get('suppression') or 0.0)))
 
         pred = get_predictor()
         seq_len = pred.seq_len_of(compartment_name)
         dt = pred.sampling_interval(compartment_name)
         dead = dead_channels_of(compartment_name)
         shape = pred.model_shapes.get(compartment_name, {})
+        n_in = int(shape.get('input_dim') or 3)
+        s_col = sup_level if n_in >= 4 else None
         trained_h = float(shape.get('trained_horizon_seconds', 30.0))
         # 同 /forecast：外推标记按单次前向可靠时长划，不按训练轨迹长度
         reliable_h = float(shape.get('reliable_horizon_seconds', trained_h))
@@ -1414,13 +1478,16 @@ def projection():
         if history:
             w = np.array([[float(p.get('temperature', 20)),
                            float(p.get('co', 0) or 0),
-                           float(p.get('co2', 3.9e-4) or 3.9e-4)] for p in history],
+                           float(p.get('co2', 3.9e-4) or 3.9e-4),
+                           min(1.0, max(0.0, float(p.get('suppression') or sup_level)))]
+                          for p in history],
                           dtype=np.float64)
             if w.ndim == 2 and w.shape[0] >= 2:
+                w = w[:, :n_in]
                 window = w[-seq_len:] if w.shape[0] >= seq_len else np.vstack(
                     [np.repeat(w[:1], seq_len - w.shape[0], axis=0), w])
         if window is None:
-            seeded, _ = seed_from_training_data(compartment_name, seq_len, step_seconds=dt)
+            seeded, _ = seed_from_training_data(compartment_name, seq_len, step_seconds=dt, s_fill=s_col)
             if not seeded:
                 return jsonify({'code': 400, 'message': '无法播种：缺少历史与训练轨迹'}), 400
             window = np.array(seeded, dtype=np.float64)
@@ -1456,10 +1523,11 @@ def projection():
                 if not all(np.isfinite(row)):
                     diverged = True
                 lstm_traj.append(row)
-                buf = np.vstack([np.array(row)[None, :], buf[:-1]])
+                row_full = row + ([sup_level] if n_in >= 4 else [])
+                buf = np.vstack([np.array(row_full)[None, :], buf[:-1]])
             if window_variance(buf.tolist(), dead) < COLLAPSE_RATIO:
                 seeded, _ = seed_from_training_data(compartment_name, seq_len, offset=seq_len * (r + 1) // 2,
-                step_seconds=dt)
+                step_seconds=dt, s_fill=s_col)
                 if seeded:
                     buf = np.array(seeded, dtype=np.float64)
                     reanchors += 1
@@ -1474,15 +1542,21 @@ def projection():
         # 指数取自模型自己的输出，不引用任何外部经验值。
         basis, out = [], []
         for i, (T, co, co2) in enumerate(lstm_traj):
+            smoke_v, oxygen_v = derived_smoke_oxygen(T, co2)
             basis.append('lstm')
             out.append(dict(time=round(i * dt, 2), temperature=round(T, 2),
                             co=round(co * 1e6, 2), co2=round(co2 * 1e6, 2),
-                            smoke=round(min(co2 * 1e6 * 10, 100.0), 2),
-                            oxygen=round(max(8.0, min(21.0, 21 - T / 100)), 2),
+                            smoke=smoke_v, oxygen=oxygen_v,
                             basis='lstm', extrapolated=bool(i * dt > reliable_h)))
 
         expo, anchor_T, anchor_t, decay = _fit_growth(lstm_traj, dt, t_max_cap)
         remaining = horizon - lstm_seconds
+        # 增长律渐近温度：干预模型 + 灭火请求时按灭火强度折减。
+        # 不折减的话，"扑救"投影的峰值仍会奔着满发展平台去 —— 实测
+        # s0600 工况（扑晚了）扑救后也只稳定在 ~70℃ 而非 195℃ 平台。
+        # 线性折减（sup=1 → 渐近环境温度）是保守的显式假设，随 basis 披露。
+        sup_eff = sup_level if n_in >= 4 else 0.0
+        t_asym = 20.0 + (1.0 - sup_eff) * (t_max_cap - 20.0) if sup_eff > 0 else t_max_cap
         if remaining > 0 and lstm_traj:
             n_steps = int(np.ceil(remaining / dt))
             T_now = lstm_traj[-1][0]
@@ -1495,15 +1569,15 @@ def projection():
                         if t > anchor_t else T_peak
                     b = 'decay'
                 else:
-                    T = min(t_max_cap, anchor_T + (t_max_cap - anchor_T) * (1 - np.exp(-(t - anchor_t) / 240.0)))
+                    T = min(t_asym, anchor_T + (t_asym - anchor_T) * (1 - np.exp(-(t - anchor_t) / 240.0)))
                     b = 'growth'
                 T = float(np.clip(T, T_LO, T_HI))
                 co2 = min(0.3, max(3.0e-4, (T - 20) / 1500.0 * 0.25))
+                smoke_v, oxygen_v = derived_smoke_oxygen(T, co2)
                 out.append(dict(time=round(t, 2), temperature=round(T, 2),
                                 co=round(min(co2 * 0.15 * 1e6, 50000.0), 2),
                                 co2=round(co2 * 1e6, 2),
-                                smoke=round(min(co2 * 1e6 * 10, 100.0), 2),
-                                oxygen=round(max(8.0, min(21.0, 21 - T / 100)), 2),
+                                smoke=smoke_v, oxygen=oxygen_v,
                                 basis=b, extrapolated=True))
                 basis.append(b)
 
@@ -1529,6 +1603,13 @@ def projection():
                     'clampedPoints': clamped_total,
                     'trainedHorizonSeconds': trained_h,
                     'reliableHorizonSeconds': reliable_h,
+                    'derivedChannels': DERIVED_CHANNELS,
+                    # 反事实灭火：本次投影用的灭火水平与模型是否支持干预通道
+                    'interventionChannel': n_in >= 4,
+                    'suppression': sup_level,
+                    # 增长律渐近温度的折减因子（0=不折减）。灭火投影的尾段
+                    # 渐近温度 = 20 + (1-因子)×(t_max_cap-20)，显式假设
+                    'growthLawSuppressionFactor': sup_eff if n_in >= 4 else 0.0,
                     'basis': 'LSTM 自回归 + 舱室火灾增长律（SOLAS II-2）',
                 }
             },

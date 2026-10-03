@@ -9,11 +9,6 @@ import './assets/styles/modern-ui.css'
 import './assets/styles/global.css'
 import './assets/styles/icons.css'
 
-// 在开发环境下引入 mock，并在应用启动前完成注册
-if (import.meta.env.DEV) {
-  await import('./mock')
-}
-
 const app = createApp(App)
 
 app.use(createPinia())

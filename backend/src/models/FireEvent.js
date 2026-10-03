@@ -50,6 +50,23 @@ const FireEvent = sequelize.define('FireEvent', {
     type: DataTypes.DATE,
     allowNull: true
   },
+  // 灭火/疏散指令与已推进步数 —— 落库是为了后端重启后能还原火场状态
+  // （谁在灭火、已烧多久），而不是重启后"从零重烧 + 指令静默丢失"。
+  suppressed: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: '灭火系统已启动'
+  },
+  evacuated: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: '人员已疏散'
+  },
+  modelSteps: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    comment: '已推进的模型步数（重启恢复用）'
+  },
   suppressedMethod: {
     type: DataTypes.ENUM('automatic', 'manual'),
     allowNull: true

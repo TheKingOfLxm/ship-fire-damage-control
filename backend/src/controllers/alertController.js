@@ -105,7 +105,18 @@ export const resolveAlert = asyncHandler(async (req, res) => {
 })
 
 export const createAlert = asyncHandler(async (req, res) => {
-  const data = req.body
+  // 字段白名单 + 基本校验：req.body 直灌 db.create 属于 mass assignment。
+  const ALLOWED_FIELDS = ['compartmentId', 'level', 'type', 'title', 'message', 'status', 'metadata']
+  const data = {}
+  for (const k of ALLOWED_FIELDS) {
+    if (req.body?.[k] !== undefined) data[k] = req.body[k]
+  }
+  if (!Number.isInteger(Number(data.compartmentId))) {
+    return res.status(400).json({ success: false, message: 'compartmentId 必须是整数' })
+  }
+  if (!['info', 'low', 'medium', 'high', 'critical'].includes(data.level)) {
+    return res.status(400).json({ success: false, message: 'level 取值无效' })
+  }
 
   const alert = await Alert.create(data)
 

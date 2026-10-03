@@ -55,10 +55,28 @@ export const getCompartmentById = asyncHandler(async (req, res) => {
   })
 })
 
-export const createCompartment = asyncHandler(async (req, res) => {
-  const data = req.body
+// 写接口的字段白名单：req.body 直灌 db.create/update 属于 mass assignment，
+// 调用方可以借此改写任意列（shipId/status 等）。status 由仿真引擎维护，
+// 不在写接口的可写范围内。
+const COMPARTMENT_FIELDS = [
+  'shipId', 'name', 'type',
+  'positionX', 'positionY', 'positionZ',
+  'firePositionX', 'firePositionY', 'firePositionZ',
+  'cameraOffsetX', 'cameraOffsetY', 'cameraOffsetZ',
+  'baseTemperature', 'baseSmoke', 'baseOxygen', 'baseCO',
+  'modelPath'
+]
 
-  const compartment = await Compartment.create(data)
+function pickCompartmentFields(body = {}) {
+  const out = {}
+  for (const k of COMPARTMENT_FIELDS) {
+    if (body[k] !== undefined) out[k] = body[k]
+  }
+  return out
+}
+
+export const createCompartment = asyncHandler(async (req, res) => {
+  const compartment = await Compartment.create(pickCompartmentFields(req.body))
 
   logger.info('创建舱室', { compartmentId: compartment.id })
 
@@ -70,7 +88,7 @@ export const createCompartment = asyncHandler(async (req, res) => {
 
 export const updateCompartment = asyncHandler(async (req, res) => {
   const { id } = req.params
-  const data = req.body
+  const data = pickCompartmentFields(req.body)
 
   const compartment = await Compartment.findByPk(id)
   if (!compartment) {

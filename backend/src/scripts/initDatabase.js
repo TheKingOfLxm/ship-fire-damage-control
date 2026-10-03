@@ -1,135 +1,66 @@
+/**
+ * 数据库初始化脚本
+ * ═══════════════════════════════════════════════════════════════
+ * ⚠ 会 sync({ force: true }) 删表重建，只在首次部署时跑。
+ *
+ * 舱室与船舶数据**全部来自 config/compartments.json**（唯一权威定义），
+ * 并显式写入配置里的 id —— 保证数据库编号与前端/后端 layout 完全一致。
+ *
+ * 旧版在这里硬编码了一份舱室数组，且顺序与配置错位（电站间拿到 id=1，
+ * 而配置里 id=1 是主机舱），正是历史上"前端操作到别的舱室还不报错"
+ * 那个 bug 的来源。本版从配置播种后，这类错位不再可能发生。
+ *
+ * 日常对齐（不删数据）请用 syncLayout.js。
+ */
 import db from '../models/index.js'
+import sequelize from '../config/database.js'
+import { ALL_COMPARTMENTS, SHIP } from '../services/layout.js'
 import logger from '../utils/logger.js'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const cOf = s => Math.round(s * 100) / 100
 
 async function initializeDatabase() {
   try {
-    logger.info('开始初始化数据库...')
+    logger.info('开始初始化数据库（⚠ 将删表重建，所有现有数据会丢失）...')
 
-    // 同步模型到数据库
-    await db.sequelize.sync({ force: true })
+    await sequelize.sync({ force: true })
     logger.info('数据库表结构已创建')
 
-    // 创建默认船舶
-    const ship = await db.Ship.create({
-      name: '智能船舶-01',
-      type: '消防船',
-      length: 65,
-      width: 12,
-      height: 8,
-      displacement: 1200,
+    const shipCfg = SHIP()
+    await db.Ship.create({
+      id: shipCfg.id,
+      name: shipCfg.name,
+      type: shipCfg.type,
+      length: shipCfg.length,
+      width: shipCfg.beam,
       status: 'active'
     })
-    logger.info('默认船舶已创建', { shipId: ship.id })
+    logger.info('默认船舶已创建', { shipId: shipCfg.id, name: shipCfg.name })
 
-    // 创建舱室
-    const compartments = [
-      {
-        shipId: ship.id,
-        name: '电站间',
-        type: 'power_station',
-        positionX: 1.5,
-        positionY: 0.8,
-        positionZ: 0,
-        firePositionX: 1.5,
-        firePositionY: 1,
-        firePositionZ: 0,
-        cameraOffsetX: -1,
-        cameraOffsetY: 2,
-        cameraOffsetZ: 3,
-        baseTemperature: 35,
-        baseSmoke: 0,
-        baseOxygen: 21,
-        baseCO: 0,
-        modelPath: '/models/电站间.glb'
-      },
-      {
-        shipId: ship.id,
-        name: '机库',
-        type: 'hangar',
-        positionX: 0.8,
-        positionY: 0.6,
-        positionZ: 0,
-        firePositionX: 0.8,
-        firePositionY: 0.8,
-        firePositionZ: 0,
-        cameraOffsetX: -2,
-        cameraOffsetY: 1.5,
-        cameraOffsetZ: 3,
-        baseTemperature: 25,
-        baseSmoke: 0,
-        baseOxygen: 21,
-        baseCO: 0,
-        modelPath: '/models/机库.glb'
-      },
-      {
-        shipId: ship.id,
-        name: '士兵住舱',
-        type: 'living_quarters',
-        positionX: -0.5,
-        positionY: 0.4,
-        positionZ: 0,
-        firePositionX: -0.5,
-        firePositionY: 0.6,
-        firePositionZ: 0,
-        cameraOffsetX: -4,
-        cameraOffsetY: 0.5,
-        cameraOffsetZ: 3,
-        baseTemperature: 22,
-        baseSmoke: 0,
-        baseOxygen: 21,
-        baseCO: 0,
-        modelPath: '/models/士兵住舱.glb'
-      },
-      {
-        shipId: ship.id,
-        name: '灶炉间',
-        type: 'galley',
-        positionX: 0.2,
-        positionY: 0.4,
-        positionZ: 0,
-        firePositionX: 0.2,
-        firePositionY: 0.6,
-        firePositionZ: 0,
-        cameraOffsetX: -3,
-        cameraOffsetY: 0.5,
-        cameraOffsetZ: 3,
-        baseTemperature: 28,
-        baseSmoke: 0,
-        baseOxygen: 21,
-        baseCO: 5,
-        modelPath: '/models/灶炉间.glb'
-      },
-      {
-        shipId: ship.id,
-        name: '主机舱',
-        type: 'engine_room',
-        positionX: 0.8,
-        positionY: 0.4,
-        positionZ: 0,
-        firePositionX: 0.8,
-        firePositionY: 0.6,
-        firePositionZ: 0,
-        cameraOffsetX: -2,
-        cameraOffsetY: 0.5,
-        cameraOffsetZ: 3,
-        baseTemperature: 45,
-        baseSmoke: 0,
-        baseOxygen: 21,
-        baseCO: 10,
-        modelPath: '/models/主机舱.glb'
-      }
-    ]
-
-    for (const compartmentData of compartments) {
-      await db.Compartment.create(compartmentData)
+    for (const cfg of ALL_COMPARTMENTS()) {
+      await db.Compartment.create({
+        id: cfg.id,                     // 显式用配置 id，杜绝编号错位
+        shipId: shipCfg.id,
+        name: cfg.name,
+        type: cfg.type,
+        positionX: cOf(cfg.anchor.x),
+        positionY: cOf(cfg.anchor.y),
+        positionZ: cOf(cfg.anchor.z),
+        firePositionX: cOf(cfg.fireOrigin.x),
+        firePositionY: cOf(cfg.fireOrigin.y),
+        firePositionZ: cOf(cfg.fireOrigin.z),
+        cameraOffsetX: cOf(cfg.camera.offset.x),
+        cameraOffsetY: cOf(cfg.camera.offset.y),
+        cameraOffsetZ: cOf(cfg.camera.offset.z),
+        baseTemperature: cfg.base.temperature,
+        baseSmoke: cfg.base.smoke,
+        baseOxygen: cfg.base.oxygen,
+        baseCO: cfg.base.co,
+        modelPath: cfg.model,
+        status: 'normal'
+      })
     }
-    logger.info('默认舱室已创建', { count: compartments.length })
+    logger.info('默认舱室已创建', { count: ALL_COMPARTMENTS().length, source: 'config/compartments.json' })
 
     logger.info('数据库初始化完成!')
     process.exit(0)

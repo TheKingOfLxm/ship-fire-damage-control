@@ -88,12 +88,14 @@
               :style="{ stroke: m.color }"
               :points="toPoints(measuredPts(m.key))"
             />
-            <!-- 预测曲线（虚线，接在实测末点之后） -->
+            <!-- 预测曲线（虚线，接在实测末点之后；超出单次可靠时域的段透明度更低一档） -->
             <polyline
-              v-if="predPts(m.key).length > 0"
+              v-for="(seg, si) in predSegments(m.key)"
+              :key="si"
               class="pane__line pane__line--pred"
+              :class="{ 'pane__line--ex': seg.extrapolated }"
               :style="{ stroke: m.color }"
-              :points="toPoints([lastMeasured(m.key), ...predPts(m.key)].filter(Boolean))"
+              :points="toPoints(seg.pts)"
             />
             <!-- 末点 -->
             <circle
@@ -117,7 +119,7 @@
     <div v-if="hasData" class="trend__xaxis">
       <span class="t-num">{{ timeStart }}s</span>
       <span class="trend__xmid">
-        实线=实测 · 虚线={{ predCaption }}<template v-if="predCount"> · {{ predCount }} 点</template>
+        实线=实测 · 虚线={{ predCaption }}<template v-if="predCount"> · {{ predCount }} 点</template><template v-if="hasExtrapolated"> · 浅色段=超出可靠时域</template><template v-if="derivedVisible"> · 烟雾/氧气为推导值</template>
       </span>
       <span class="t-num">现在</span>
     </div>
@@ -150,10 +152,11 @@ const METRICS = [
   { key: 'temperature', short: '温度', label: '温度', unit: '℃', color: '#f97316', max: 800, warn: 200, crit: 400, digits: 0 },
   { key: 'smoke', short: '烟雾', label: '烟雾', unit: '%', color: '#a78bfa', max: 100, warn: 20, crit: 45, digits: 0 },
   { key: 'oxygen', short: '氧气', label: '氧气', unit: '%', color: '#38bdf8', max: 25, warn: 19, crit: 16, digits: 1, invert: true },
-  { key: 'co', short: 'CO', label: '一氧化碳', unit: 'ppm', color: '#facc15', max: 500, warn: 50, crit: 150, digits: 0 }
+  { key: 'co', short: 'CO', label: '一氧化碳', unit: 'ppm', color: '#facc15', max: 500, warn: 50, crit: 150, digits: 0 },
+  { key: 'co2', short: 'CO₂', label: '二氧化碳', unit: 'ppm', color: '#34d399', max: 60000, warn: 15000, crit: 50000, digits: 0 }
 ]
 
-const visible = reactive({ temperature: true, smoke: true, oxygen: false, co: true })
+const visible = reactive({ temperature: true, smoke: true, oxygen: false, co: true, co2: true })
 
 const toggle = key => {
   visible[key] = !visible[key]
@@ -207,18 +210,67 @@ function scaleOf(key) {
   }
 }
 
-const plotW = computed(() => PANE_W * 0.78)   // 右侧留给预测区
+const plotW = computed(() => PANE_W * 0.78)   // 无预测时右侧留白
 
-function xOf(i, n) {
-  return n > 1 ? (i / (n - 1)) * plotW.value : 0
+/* ------------------------------------------------------------------ */
+/* X 轴：历史与预测共用一条真实时间轴                                   */
+/* ------------------------------------------------------------------ */
+/** ISO 字符串/数字统一转毫秒（后端 /history 给的是 ISO 字符串） */
+const toMs = v => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string') {
+    const n = Number(v)
+    if (Number.isFinite(n)) return n
+    const t = Date.parse(v)
+    return Number.isFinite(t) ? t : null
+  }
+  return null
 }
+
+const timeAnchor = computed(() => {
+  const s = props.series
+  const n = s.length
+  const a = n ? toMs(s[0]?.timestamp) : null
+  const b = n ? toMs(s[n - 1]?.timestamp) : null
+  if (a != null && b != null && b > a) return { t0: a, t1: b, hasTs: true }
+  // timestamp 缺失时按 1s/点等间隔估算
+  return { t0: 0, t1: Math.max(1, (n - 1) * 1000), hasTs: false }
+})
+
+/** 时间域（秒）：历史跨度 + 预测跨度。有预测时两者按真实秒数摊满画布，
+ *  900 秒预测对 240 秒历史不再是等距错位的 1:1 排布。 */
+const timeDomain = computed(() => {
+  const { t0, t1, hasTs } = timeAnchor.value
+  const histSpan = hasTs ? Math.max(1, (t1 - t0) / 1000) : Math.max(1, props.series.length - 1)
+  const predSpan = props.predictions.length
+    ? Math.max(1, ...props.predictions.map(p => Number(p.time) || 0))
+    : 0
+  return { histSpan, predSpan, total: histSpan + predSpan }
+})
+
+/** 历史区宽度：有预测时按真实时间比例分摊 */
+const histW = computed(() =>
+  timeDomain.value.predSpan > 0
+    ? PANE_W * timeDomain.value.histSpan / timeDomain.value.total
+    : plotW.value)
+
+const xOfMs = ms =>
+  ((ms - timeAnchor.value.t0) / 1000 / timeDomain.value.total) * PANE_W
 
 const measuredPts = key => {
   const s = scaleOf(key)
   const n = props.series.length
+  const { hasTs } = timeAnchor.value
   return props.series.map((d, i) => {
     const v = Number(d[key])
-    return { x: xOf(i, n), y: s.toY(Number.isFinite(v) ? v : s.min) }
+    let x
+    if (hasTs) {
+      const ms = toMs(d.timestamp)
+      x = ms != null ? xOfMs(ms) : (i / Math.max(1, n - 1)) * histW.value
+    } else {
+      x = (i / Math.max(1, n - 1)) * histW.value
+    }
+    return { x, y: s.toY(Number.isFinite(v) ? v : s.min) }
   })
 }
 
@@ -232,16 +284,45 @@ const predPts = key => {
   const s = scaleOf(key)
   const anchor = lastMeasured(key)
   if (!anchor) return []
-  const n = props.series.length
-  const step = n > 1 ? plotW.value / (n - 1) : 1
-  return props.predictions.map((p, i) => {
+  const { total } = timeDomain.value
+  return props.predictions.map(p => {
     const v = Number(p[key] ?? p[`${key}Level`])
-    return { x: anchor.x + (i + 1) * step, y: s.toY(Number.isFinite(v) ? v : s.min) }
+    const t = Number(p.time) || 0
+    return {
+      x: Math.min(PANE_W, histW.value + (t / total) * PANE_W),
+      y: s.toY(Number.isFinite(v) ? v : s.min),
+      extrapolated: !!p.extrapolated
+    }
   })
 }
 
+/** 预测点按 extrapolated 标记分段：超出可靠时域的段透明度更低。
+ *  段间共享端点坐标，折线视觉上连续。 */
+const predSegments = key => {
+  const pts = predPts(key)
+  if (!pts.length) return []
+  const anchor = lastMeasured(key)
+  const segs = []
+  let cur = { extrapolated: !!pts[0].extrapolated, pts: anchor ? [anchor] : [] }
+  for (const p of pts) {
+    if (!!p.extrapolated !== cur.extrapolated) {
+      cur.pts.push(p)
+      segs.push(cur)
+      cur = { extrapolated: !!p.extrapolated, pts: [p] }
+    } else {
+      cur.pts.push(p)
+    }
+  }
+  segs.push(cur)
+  return segs.filter(s => s.pts.length > 1)
+}
+
+const hasExtrapolated = computed(() => props.predictions.some(p => p.extrapolated))
+/** 烟雾/氧气是推导值（模型只输出温度/CO/CO₂），可见时要如实标注 */
+const derivedVisible = computed(() => visible.smoke || visible.oxygen)
+
 /** 预测区起点（最后一个实测点） */
-const predZoneX = computed(() => lastMeasured('temperature')?.x ?? plotW.value)
+const predZoneX = computed(() => lastMeasured('temperature')?.x ?? histW.value)
 
 /**
  * 模型段 / 增长律段的分界位置（画在图上的 x）。
@@ -321,15 +402,7 @@ const deltaClass = key => {
 }
 
 /** X 轴起点相对现在的秒数 */
-const timeStart = computed(() => {
-  const n = props.series.length
-  if (n < 2) return 0
-  const a = Number(props.series[0].timestamp)
-  const b = Number(props.series[n - 1].timestamp)
-  if (Number.isFinite(a) && Number.isFinite(b) && b > a) return -Math.round((b - a) / 1000)
-  // timestamp 缺失时按 1s 采样估算
-  return -(n - 1)
-})
+const timeStart = computed(() => -Math.round(timeDomain.value.histSpan))
 </script>
 
 <style scoped>
@@ -417,6 +490,8 @@ const timeStart = computed(() => {
   vector-effect: non-scaling-stroke;
 }
 .pane__line--pred { stroke-dasharray: 3 3; stroke-width: 1.3; opacity: 0.9; }
+/* 超出单次可靠时域的累积外推段：更浅、更细，与模型输出区分 */
+.pane__line--ex { opacity: 0.45; stroke-width: 1.1; }
 .pane__dot { vector-effect: non-scaling-stroke; }
 
 .pane__y {

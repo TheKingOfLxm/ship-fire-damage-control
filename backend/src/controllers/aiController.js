@@ -162,7 +162,9 @@ async function tryAIProvider(provider, apiKey, prompt, sensorData) {
       logger.info(`GLM API响应成功`, { status: response.status })
 
       const aiResult = response.data.choices[0].message.content
-      logger.info('GLM响应内容', { aiText: aiResult?.substring(0, 1000) }) // 记录前1000字符
+      // 只记长度不记内容：AI 回复可能含火情细节，整段落日志属于
+      // 无谓的敏感信息沉积，排障需要的是"拿到了多长的回复"。
+      logger.info('GLM响应成功', { chars: aiResult?.length ?? 0 })
 
       const analysisResult = parseAIResponse(aiResult, sensorData)
       analysisResult.provider = 'glm'
@@ -200,7 +202,7 @@ async function tryAIProvider(provider, apiKey, prompt, sensorData) {
       const aiResult = response.data.output?.choices?.[0]?.message?.content
         || response.data.output?.text
         || ''
-      logger.info('Qwen响应内容', { aiText: aiResult?.substring(0, 1000) }) // 记录前1000字符
+      logger.info('Qwen响应成功', { chars: aiResult?.length ?? 0 })
 
       const analysisResult = parseAIResponse(aiResult, sensorData)
       analysisResult.provider = 'qwen'
